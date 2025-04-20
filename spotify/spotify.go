@@ -318,6 +318,8 @@ func playPlaylist(deviceName string, contextUri string, accessToken string, volu
 	}
 
 	setVolume(volumePercent, accessToken, deviceName)
+	enableShuffle(accessToken, deviceName)
+	enableRepeat(accessToken, deviceName)
 
 	return makeRequest("PUT", urlStr, accessToken, jsonBody)
 }
@@ -333,7 +335,7 @@ func pausePlayback(accessToken string, deviceName ...string) (*http.Response, er
 
 	deviceId, _ = getDeviceId(deviceN, accessToken)
 
-	jsonBody, err := json.Marshal(gin.H {
+	jsonBody, err := json.Marshal(gin.H{
 		"device_id": deviceId,
 	})
 
@@ -425,6 +427,38 @@ func refreshToken(refreshToken string, sp *Spotify) (string, error) {
 	}
 
 	return tokenResp.AccessToken, nil
+}
+
+func enableShuffle(accessToken string, deviceName string) {
+	baseUrl := "https://api.spotify.com/v1/me/player/shuffle"
+
+	deviceId, err := getDeviceId(deviceName, accessToken)
+
+	params := url.Values{}
+	params.Set("state", "true")
+	if err == nil && deviceId != "" {
+		params.Set("device_id", deviceId)
+	}
+
+	urlStr := baseUrl + "?" + params.Encode()
+
+	makeRequest("PUT", urlStr, accessToken)
+}
+
+func enableRepeat(accessToken string, deviceName string) {
+	baseUrl := "https://api.spotify.com/v1/me/player/repeat"
+
+	deviceId, err := getDeviceId(deviceName, accessToken)
+
+	params := url.Values{}
+	params.Set("state", "context")
+	if err == nil && deviceId != "" {
+		params.Set("device_id", deviceId)
+	}
+
+	urlStr := baseUrl + "?" + params.Encode()
+
+	makeRequest("PUT", urlStr, accessToken)
 }
 
 // Verify tokens and context
@@ -577,7 +611,7 @@ func Pause(c *gin.Context) {
 	device_name := c.Query("device_name")
 
 	if device_name == "" {
-		c.JSON(http.StatusBadRequest, gin.H {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "device_name is required",
 		})
 		return
@@ -593,7 +627,7 @@ func Pause(c *gin.Context) {
 	if _, err := getCurrentPlayBack(c); err == nil {
 		_, err := pausePlayback(accessToken.(string))
 		if err == nil {
-			c.JSON(http.StatusOK, gin.H {
+			c.JSON(http.StatusOK, gin.H{
 				"message": "Music paused successfully",
 			})
 			return
@@ -733,7 +767,7 @@ func Volume(c *gin.Context) {
 
 	setVolume(volume, accessToken.(string), currentPlayback.Device.Name)
 
-	c.JSON(http.StatusOK, gin.H {
+	c.JSON(http.StatusOK, gin.H{
 		"message": "Volume setted successfully",
 	})
 }

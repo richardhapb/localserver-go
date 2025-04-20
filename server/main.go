@@ -6,15 +6,6 @@ import (
 	"log"
 )
 
-// @app.route("/richard/login", methods=["POST"])
-// @app.route("/spotify/pause")
-// @app.route("/schedule")
-// @app.route("/spotify/login")
-// @app.route("/spotify/callback")
-// @app.route("/spotify/playlist")
-// @app.route("/spotify/volume")
-// @app.route("/spotify/get-device", methods=["POST"])
-
 func CreateServer() {
 	log.Println("Connecting to server...")
 
