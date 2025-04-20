@@ -32,9 +32,9 @@ func CreateServer() {
 		protected.Use(spotify.SpotifyMiddleware())
 		{
 			protected.GET("/pause", spotify.Pause)
-			protected.GET("/schedule", spotify.Pause)
-			protected.GET("/playlist", spotify.Pause)
-			protected.GET("/volume", spotify.Pause)
+			protected.GET("/schedule", spotify.Schedule)
+			protected.GET("/playlist", spotify.Playlist)
+			protected.GET("/volume", spotify.Volume)
 		}
 	}
 

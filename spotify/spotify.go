@@ -317,8 +317,7 @@ func playPlaylist(deviceName string, contextUri string, accessToken string, volu
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	deviceId, _ := getDeviceId(deviceName, accessToken)
-	setVolume(volumePercent, accessToken, deviceId)
+	setVolume(volumePercent, accessToken, deviceName)
 
 	return makeRequest("PUT", urlStr, accessToken, jsonBody)
 }
@@ -581,6 +580,7 @@ func Pause(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H {
 			"error": "device_name is required",
 		})
+		return
 	}
 
 	accessToken, exists := c.Get("access_token")
@@ -732,4 +732,8 @@ func Volume(c *gin.Context) {
 	}
 
 	setVolume(volume, accessToken.(string), currentPlayback.Device.Name)
+
+	c.JSON(http.StatusOK, gin.H {
+		"message": "Volume setted successfully",
+	})
 }
