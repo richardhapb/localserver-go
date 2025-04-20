@@ -1,19 +1,38 @@
 package spotify
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
 
-var currentEnv *Spotify
+var (
+	currentEnv *Spotify
+	envs	   = make(map[string]Spotify)
+)
 
 type Spotify struct {
-	SpotifyCallbackUri string
-	ClientId		   string
-	ClientSecret	   string
-	Devices			   []string
+	CallbackUri    string
+	ClientId	   string
+	ClientSecret   string
+	Devices		   []string
+	tokensFilePath string
+}
+
+type Tokens struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 // Home is the Sporify instance used in home
@@ -31,26 +50,189 @@ var EnvironmentName = map[Environment]string{
 }
 
 func new(environment Environment) *Spotify {
-	var sp Spotify
-	if environment == HOME {
-		sp.ClientId = ""
-		sp.ClientSecret = ""
-		sp.Devices = []string{"MacBook Air de Richard", "iPhone"}
-		sp.SpotifyCallbackUri = ""
-	} else {
-		sp.ClientId = ""
-		sp.ClientSecret = ""
-		sp.Devices = []string{"librespot"}
-		sp.SpotifyCallbackUri = ""
+	// If exists return it, this avoid duplicates instances
+	if _, exists := envs[string(environment)]; exists {
+		sp := envs[string(environment)]
+		log.Println("Returning existent Spotify instance")
+		return &sp
 	}
+	log.Println("Creating new Spotify instance")
+
+	if err := godotenv.Load(); err != nil {
+		log.Println(".env not found")
+		return nil
+	}
+
+	var sp Spotify
+	envPrefix := ""
+
+	switch environment {
+	case HOME:
+		envPrefix = "HOME_"
+		sp.Devices = []string{"MacBook Air de Richard", "iPhone"}
+	case MAIN:
+		envPrefix = "MAIN_"
+		sp.Devices = []string{"librespot"}
+	default:
+		return nil
+	}
+
+	sp.ClientId = os.Getenv(envPrefix + "SP_CLIENT_ID")
+	sp.ClientSecret = os.Getenv(envPrefix + "SP_CLIENT_SECRET")
+	sp.CallbackUri = os.Getenv(envPrefix + "SP_CALLBACK_URI")
+	sp.tokensFilePath = fmt.Sprintf(".tokens/.tokens-%s.txt", string(environment))
 
 	return &sp
 }
 
+// Update the current active environment
 func updateEnv(newEnv *Spotify) {
 	currentEnv = newEnv
 }
 
+func getDeviceId(deviceName string, accessToken string) (string, error) {
+	url := "https://api.spotify.com/v1/me/player/devices"
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return "", fmt.Errorf("Failed to execute request: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	var devicesResponse struct {
+		Devices []struct {
+			ID	 string `json:"id"`
+			Name string `json:"name"`
+		} `json:"devices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+		return "", fmt.Errorf("Failed in request when retrieving device: %w", err)
+	}
+
+	deviceId := ""
+
+	for _, device := range devicesResponse.Devices {
+		if device.Name == deviceName {
+			deviceId = device.ID
+		}
+
+		if deviceId != "" {
+			break
+		}
+	}
+
+	return deviceId, nil
+}
+
+func schedule(epochMillis int, action func()) {
+	seconds := epochMillis/1000 - int(time.Now().UnixMilli())/1000
+
+	if seconds < 0 {
+		log.Println("epochMillis is in the past in schedule function")
+		return
+	}
+
+	go func() {
+		time.Sleep(time.Duration(seconds) * time.Second)
+		action()
+	}()
+}
+
+func makeRequest(method string, url string, accessToken string, body ...[]byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewBuffer(body[0])
+	}
+
+	req, err := http.NewRequest(method, url, bodyReader)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+
+	client := &http.Client{}
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed in request: %w", err)
+	}
+
+	return resp, nil
+}
+
+func setVolume(volumePercent int, accessToken string, deviceId string)
+
+func playPlaylist(deviceName string, contextUri string, accessToken string, volumePercent int) (*http.Response, error) {
+	if volumePercent == 0 {
+		volumePercent = 80
+	}
+
+	url := "https://api.spotify.com/v1/me/player/play?device_id="
+
+	jsonBody, err := json.Marshal(gin.H{
+		"context_uri": contextUri,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	deviceId, _ := getDeviceId(deviceName, accessToken)
+	setVolume(volumePercent, accessToken, deviceId)
+
+	return makeRequest("PUT", url+deviceId, accessToken, jsonBody)
+}
+
+func pausePlayback(accessToken string, deviceName string) (*http.Response, error) {
+	url := "https://api.spotify.com/v1/me/player/pause"
+
+	if deviceName == "" {
+		deviceName = currentEnv.Devices[0]
+	}
+
+	return makeRequest("PUT", url, accessToken)
+}
+
+// Verify tokens and context
+func SpotifyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if currentEnv == nil {
+			currentEnv = new(Environment("home"))
+		}
+
+		tokens, err := readTokensFromFile(currentEnv.tokensFilePath)
+
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Spotify tokens not found",
+			})
+			c.Abort()
+			return
+		}
+
+		c.Set("access_token", tokens.AccessToken)
+		c.Set("refresh_token", tokens.RefreshToken)
+		c.Next()
+	}
+}
+
+// Handle the login in Spotify using Client ID and Client Secret
 func Login(c *gin.Context) {
 	errMsg := "Account is incorrect. You need to pass the account type as a URL argument: env={account type}. It should be either home or main."
 
@@ -67,33 +249,129 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": errMsg,
 		})
-
+		return
 	}
 
 	sp := new(Environment(environment))
-
 	updateEnv(sp)
 
+	scopeList := []string{"user-read-playback-state", "user-modify-playback-state"}
+	scope := strings.Join(scopeList, " ")
+
+	params := url.Values{}
+	params.Set("client_id", sp.ClientId)
+	params.Set("response_type", "code")
+	params.Set("redirect_uri", sp.CallbackUri)
+	params.Set("scope", scope)
+
+	authUrl := "https://accounts.spotify.com/authorize?" + params.Encode()
+
+	c.Redirect(http.StatusTemporaryRedirect, authUrl)
+}
+
+// Handle the Spotify callback when login
+func Callback(c *gin.Context) {
+
+	sp := currentEnv
+
+	if sp == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "missing spotify account type (home or main)",
+		})
+		return
+	}
+
+	code := c.Query("code")
+
+	if code == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "missing callback code",
+		})
+		return
+	}
+
+	values := url.Values{}
+	values.Add("grant_type", "authorization_code")
+	values.Add("code", code)
+	values.Add("redirect_uri", sp.CallbackUri)
+	values.Add("client_id", sp.ClientId)
+	values.Add("client_secret", sp.ClientSecret)
+
+	tokenUrl := "https://accounts.spotify.com/api/token"
+
+	resp, err := http.Post(tokenUrl, "application/x-www-form-urlencoded", strings.NewReader(values.Encode()))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to request token: " + err.Error()})
+		return
+	}
+
+	defer resp.Body.Close()
+
+	tokenResponse := Tokens{}
+
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse token response: " + err.Error()})
+		return
+	}
+
+	if err := writeTokensToFile(&tokenResponse, sp.tokensFilePath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save tokens: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("Loging with %s", environment),
+		"message": "Login ready!",
 	})
 }
 
-// def login():
-//	   if not check_token():
-//		   return Response("Unauthorized", 401)
-//
-//	   account_type = request.args.get("account")
-//
-//	   if not account_type or (account_type != "home" and account_type != "main"):
-//		   return Response("Account is incorrect. You need to pass the account type as a URL argument: account=<account type>. It should be either home or main.", 400)
-//
-//	   global account
-//	   account = account_type
-//
-//	   secrets = get_client_secrets(MAIN_DEFAULT if account == "main" else HOME_DEFAULT)
-//
-//	   scope = "user-read-playback-state user-modify-playback-state"
-//	   auth_url = f"https://accounts.spotify.com/authorize?client_id={secrets.client_id}&response_type=code&redirect_uri={SP_CALLBACK_URI}&scope={scope}"
-//	   return redirect(auth_url)
-//
+// Write tokens to a file for storage them
+func writeTokensToFile(tokensLines *Tokens, fileName string) error {
+	dir := strings.Split(fileName, "/")
+	dirName := strings.Join(dir[:len(dir)-1], "/")
+	_, err := os.Stat(dirName)
+
+	if err != nil && os.IsNotExist(err) {
+		os.MkdirAll(dirName, os.ModePerm)
+	}
+
+	tokens := []string{
+		"access_token:" + tokensLines.AccessToken,
+		"refresh_token:" + tokensLines.RefreshToken,
+	}
+
+	data := []byte(strings.Join(tokens, "\n") + "\n")
+	return os.WriteFile(fileName, data, 0600)
+}
+
+func readTokensFromFile(fileName string) (*Tokens, error) {
+	data, err := os.ReadFile(fileName)
+	result := Tokens{}
+
+	if err != nil {
+		return nil, err
+	}
+
+	dataStr := string(data)
+	tokens := strings.Split(dataStr, "\n")
+
+	for _, token := range tokens {
+		elements := strings.SplitN(token, ":", 2)
+
+		if len(elements) == 2 {
+			key := strings.TrimSpace(elements[0])
+			value := strings.TrimSpace(elements[1])
+
+			if key == "access_token" {
+				result.AccessToken = value
+			} else if key == "refresh_token" {
+				result.RefreshToken = value
+			}
+		}
+	}
+
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		return nil, errors.New(fmt.Sprintf("error retrieving data from file: %s", fileName))
+	}
+
+	return &result, nil
+}

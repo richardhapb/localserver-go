@@ -1,9 +1,9 @@
 package server
 
 import (
-	"fmt"
 	"github.com/gin-gonic/gin"
 	"localserver/spotify"
+	"log"
 )
 
 // @app.route("/richard/login", methods=["POST"])
@@ -17,12 +17,24 @@ import (
 
 
 func CreateServer() {
+	log.Println("Connecting to server...")
+
 	router := gin.Default()
+	router.SetTrustedProxies(nil)
 
-	SPOTIFY := "spotify"
+	spotifyGroup := router.Group("/spotify")
+	{
+		// Public route without middleware
+		spotifyGroup.GET("/login", spotify.Login)
+		spotifyGroup.GET("/callback", spotify.Callback)
 
-	router.GET(fmt.Sprintf("%s/login", SPOTIFY), spotify.Login)
+		// Protected routes with middleware
+		protected := spotifyGroup.Group("")
+		protected.Use(spotify.SpotifyMiddleware())
+		{
+		}
+	}
 
-	router.Run()
+	router.Run(":9000")
 }
 
