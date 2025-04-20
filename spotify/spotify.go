@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,11 @@ import (
 var (
 	currentEnv *Spotify
 	envs	   = make(map[string]Spotify)
+)
+
+const (
+	CURR_PLAYBACK_URL = "https://api.spotify.com/v1/me/player"
+	RELAX_PLAYLIST	  = "spotify:playlist:0qPA1tBtiCLVHCUfREECnO"
 )
 
 type Spotify struct {
@@ -33,6 +39,11 @@ type Spotify struct {
 type Tokens struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+type Playback struct {
+	Device	 string `json:"device"`
+	IsActive bool	`json:"is_active"`
 }
 
 // Home is the Sporify instance used in home
@@ -85,15 +96,88 @@ func new(environment Environment) *Spotify {
 	return &sp
 }
 
+// Write tokens to a file for storage them
+func writeTokensToFile(tokensLines *Tokens, fileName string) error {
+	dir := strings.Split(fileName, "/")
+	dirName := strings.Join(dir[:len(dir)-1], "/")
+	_, err := os.Stat(dirName)
+
+	if err != nil && os.IsNotExist(err) {
+		os.MkdirAll(dirName, os.ModePerm)
+	}
+
+	tokens := []string{
+		"access_token:" + tokensLines.AccessToken,
+		"refresh_token:" + tokensLines.RefreshToken,
+	}
+
+	data := []byte(strings.Join(tokens, "\n") + "\n")
+	return os.WriteFile(fileName, data, 0600)
+}
+
+func readTokensFromFile(fileName string) (*Tokens, error) {
+	data, err := os.ReadFile(fileName)
+	result := Tokens{}
+
+	if err != nil {
+		return nil, err
+	}
+
+	dataStr := string(data)
+	tokens := strings.Split(dataStr, "\n")
+
+	for _, token := range tokens {
+		elements := strings.SplitN(token, ":", 2)
+
+		if len(elements) == 2 {
+			key := strings.TrimSpace(elements[0])
+			value := strings.TrimSpace(elements[1])
+
+			if key == "access_token" {
+				result.AccessToken = value
+			} else if key == "refresh_token" {
+				result.RefreshToken = value
+			}
+		}
+	}
+
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		return nil, errors.New(fmt.Sprintf("error retrieving data from file: %s", fileName))
+	}
+
+	return &result, nil
+}
+
 // Update the current active environment
 func updateEnv(newEnv *Spotify) {
 	currentEnv = newEnv
 }
 
-func getDeviceId(deviceName string, accessToken string) (string, error) {
-	url := "https://api.spotify.com/v1/me/player/devices"
+func getCurrentPlayBack(c *gin.Context) (*Playback, error) {
+	accessToken, exists := c.Get("access_token")
 
-	req, err := http.NewRequest("GET", url, nil)
+	if !exists {
+		defaultNotAccessTokenResponse(c)
+		return nil, fmt.Errorf("error getting current playback")
+	}
+
+	playbackResponse := Playback{}
+	resp, resp_err := makeRequest("GET", CURR_PLAYBACK_URL, accessToken.(string))
+
+	if err := json.NewDecoder(resp.Body).Decode(&playbackResponse); resp_err != nil || err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Error retrieving current playback data",
+		})
+		return nil, err
+	}
+
+	return &playbackResponse, nil
+}
+
+func getDeviceId(deviceName string, accessToken string) (string, error) {
+	urlStr := "https://api.spotify.com/v1/me/player/devices"
+
+	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -150,13 +234,13 @@ func schedule(epochMillis int, action func()) {
 	}()
 }
 
-func makeRequest(method string, url string, accessToken string, body ...[]byte) (*http.Response, error) {
+func makeRequest(method string, urlStr string, accessToken string, body ...[]byte) (*http.Response, error) {
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewBuffer(body[0])
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequest(method, urlStr, bodyReader)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -173,17 +257,26 @@ func makeRequest(method string, url string, accessToken string, body ...[]byte) 
 		return nil, fmt.Errorf("failed in request: %w", err)
 	}
 
+	defer resp.Body.Close()
+
 	return resp, nil
 }
 
-func setVolume(volumePercent int, accessToken string, deviceId string)
+func setVolume(volumePercent int, accessToken string, deviceName string) (*http.Response, error) {
+	baseUrl := "https://api.spotify.com/v1/me/player/volume"
+	deviceId, _ := getDeviceId(deviceName, accessToken)
+
+	params := url.Values{}
+	params.Set("volume_percent", strconv.Itoa(volumePercent))
+	params.Set("device_id", deviceId)
+
+	urlStr := baseUrl + "?" + params.Encode()
+
+	return makeRequest("PUT", urlStr, accessToken)
+}
 
 func playPlaylist(deviceName string, contextUri string, accessToken string, volumePercent int) (*http.Response, error) {
-	if volumePercent == 0 {
-		volumePercent = 80
-	}
-
-	url := "https://api.spotify.com/v1/me/player/play?device_id="
+	urlStr := "https://api.spotify.com/v1/me/player/play"
 
 	jsonBody, err := json.Marshal(gin.H{
 		"context_uri": contextUri,
@@ -196,17 +289,23 @@ func playPlaylist(deviceName string, contextUri string, accessToken string, volu
 	deviceId, _ := getDeviceId(deviceName, accessToken)
 	setVolume(volumePercent, accessToken, deviceId)
 
-	return makeRequest("PUT", url+deviceId, accessToken, jsonBody)
+	return makeRequest("PUT", urlStr, accessToken, jsonBody)
 }
 
 func pausePlayback(accessToken string, deviceName string) (*http.Response, error) {
-	url := "https://api.spotify.com/v1/me/player/pause"
+	urlStr := "https://api.spotify.com/v1/me/player/pause"
 
 	if deviceName == "" {
 		deviceName = currentEnv.Devices[0]
 	}
 
-	return makeRequest("PUT", url, accessToken)
+	return makeRequest("PUT", urlStr, accessToken)
+}
+
+func defaultNotAccessTokenResponse(c *gin.Context) {
+	c.JSON(http.StatusUnauthorized, gin.H{
+		"error": "Access token not found",
+	})
 }
 
 // Verify tokens and context
@@ -324,54 +423,167 @@ func Callback(c *gin.Context) {
 	})
 }
 
-// Write tokens to a file for storage them
-func writeTokensToFile(tokensLines *Tokens, fileName string) error {
-	dir := strings.Split(fileName, "/")
-	dirName := strings.Join(dir[:len(dir)-1], "/")
-	_, err := os.Stat(dirName)
+func Pause(c *gin.Context) {
+	percentaje := c.Query("percentaje")
 
-	if err != nil && os.IsNotExist(err) {
-		os.MkdirAll(dirName, os.ModePerm)
+	volume, err := strconv.Atoi(percentaje)
+
+	if percentaje == "" || err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Volume percentaje is required and must be correct",
+		})
+		return
 	}
 
-	tokens := []string{
-		"access_token:" + tokensLines.AccessToken,
-		"refresh_token:" + tokensLines.RefreshToken,
+	accessToken, exists := c.Get("access_token")
+
+	if !exists {
+		defaultNotAccessTokenResponse(c)
+		return
 	}
 
-	data := []byte(strings.Join(tokens, "\n") + "\n")
-	return os.WriteFile(fileName, data, 0600)
-}
-
-func readTokensFromFile(fileName string) (*Tokens, error) {
-	data, err := os.ReadFile(fileName)
-	result := Tokens{}
+	currentPlayback, err := getCurrentPlayBack(c)
 
 	if err != nil {
-		return nil, err
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "There is not a playback currently",
+		})
+		return
 	}
 
-	dataStr := string(data)
-	tokens := strings.Split(dataStr, "\n")
+	setVolume(volume, accessToken.(string), currentPlayback.Device)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Playback paused successfully",
+	})
+}
 
-	for _, token := range tokens {
-		elements := strings.SplitN(token, ":", 2)
+func Schedule(c *gin.Context) {
+	action := c.Query("action")
+	timeMillis := c.Query("time_millis")
 
-		if len(elements) == 2 {
-			key := strings.TrimSpace(elements[0])
-			value := strings.TrimSpace(elements[1])
+	if timeMillis == "" || action == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "action and time_millis are required",
+		})
+		return
+	}
 
-			if key == "access_token" {
-				result.AccessToken = value
-			} else if key == "refresh_token" {
-				result.RefreshToken = value
-			}
+	accessToken, exists := c.Get("access_token")
+
+	if !exists {
+		defaultNotAccessTokenResponse(c)
+		return
+	}
+
+	var fn func()
+	homeDevice := envs["home"].Devices[0]
+
+	switch action {
+	case "alarm":
+		fn = func() {
+			playPlaylist(
+				homeDevice,
+				RELAX_PLAYLIST,
+				accessToken.(string),
+				60,
+			)
+		}
+	case "sleep":
+		fn = func() {
+			pausePlayback(accessToken.(string), homeDevice)
 		}
 	}
 
-	if result.AccessToken == "" || result.RefreshToken == "" {
-		return nil, errors.New(fmt.Sprintf("error retrieving data from file: %s", fileName))
+	epochMillis, err := strconv.Atoi(timeMillis)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pub_milis must be an integer",
+		})
+		return
 	}
 
-	return &result, nil
+	schedule(epochMillis, fn)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Schedule setted successfully",
+	})
+}
+
+func Playlist(c *gin.Context) {
+	uri := c.Query("uri")
+	volumeStr := c.DefaultQuery("volume", "80")
+	deviceName := c.DefaultQuery("device_name", currentEnv.Devices[0])
+
+	if uri == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "URI is required",
+		})
+		return
+	}
+
+	volume, err := strconv.Atoi(volumeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid volume value",
+		})
+		return
+	}
+
+	accessToken, exists := c.Get("access_token")
+
+	if !exists {
+		defaultNotAccessTokenResponse(c)
+		return
+	}
+
+	resp, err := playPlaylist(deviceName, uri, accessToken.(string), volume)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Error playing playlist: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Playlist started successfully",
+	})
+}
+
+func Volume(c *gin.Context) {
+	percentaje := c.Query("percentaje")
+
+	if percentaje == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "percentaje is required",
+		})
+		return
+	}
+
+	volume, err := strconv.Atoi(percentaje)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "percentaje must be a number",
+		})
+		return
+	}
+
+	accessToken, exists := c.Get("access_token")
+
+	if !exists {
+		defaultNotAccessTokenResponse(c)
+		return
+	}
+
+	currentPlayback, err := getCurrentPlayBack(c)
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "There is not a playback currently",
+		})
+		return
+	}
+
+	setVolume(volume, accessToken.(string), currentPlayback.Device)
 }
