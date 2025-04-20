@@ -15,7 +15,6 @@ import (
 // @app.route("/spotify/volume")
 // @app.route("/spotify/get-device", methods=["POST"])
 
-
 func CreateServer() {
 	log.Println("Connecting to server...")
 
@@ -32,9 +31,12 @@ func CreateServer() {
 		protected := spotifyGroup.Group("")
 		protected.Use(spotify.SpotifyMiddleware())
 		{
+			protected.GET("/pause", spotify.Pause)
+			protected.GET("/schedule", spotify.Pause)
+			protected.GET("/playlist", spotify.Pause)
+			protected.GET("/volume", spotify.Pause)
 		}
 	}
 
 	router.Run(":9000")
 }
-
