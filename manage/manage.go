@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"slices"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -57,7 +56,7 @@ func new() *[]deviceAttributes {
 
 	da = append(da, deviceAttributes{
 		name:   "arch-richard",
-		macEnv: "MAC_arch",
+		macEnv: "MAC_ARCH",
 		wakeCommands: []string{
 			"export DISPLAY=:0",
 			"DISPLAY=:0 xset dpms force on",
@@ -90,9 +89,9 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 		return nil, fmt.Errorf("name is requested")
 	}
 
-	deviceAtt := getDeviceAtt(device.name)
+	device.attritutes = getDeviceAtt(device.name)
 
-	if deviceAtt == nil {
+	if device.attritutes == nil {
 		return nil, fmt.Errorf("device not found")
 	}
 
@@ -102,7 +101,7 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 
 	urlStr := "https://api.tailscale.com/api/v2/tailnet/richardhapb.github/devices"
 	apiKey := os.Getenv("TS_API_KEY")
-	mac := os.Getenv(device.name)
+	mac := os.Getenv(device.attritutes.macEnv)
 
 	if apiKey == "" || mac == "" {
 		return nil, fmt.Errorf("Api key or MAC not found")
@@ -142,7 +141,6 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 
 	device.ip = ip
 	device.username = "richard"
-	device.attritutes = deviceAtt
 
 	return &device, nil
 }
@@ -152,6 +150,7 @@ func Wake(c *gin.Context) {
 	device, err := validateRequest(c)
 
 	if err != nil {
+		log.Fatalln(err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 		return
 	}
@@ -163,7 +162,7 @@ func Wake(c *gin.Context) {
 	}
 
 	for _, cmd := range device.attritutes.wakeCommands {
-		if err := sendCommand(cmd, "richard", device.ip); err != nil {
+		if err := sendCommand(cmd, device.username, device.ip); err != nil {
 			log.Printf("Command failed: %s", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 			return
@@ -178,6 +177,7 @@ func Sleep(c *gin.Context) {
 	device, err := validateRequest(c)
 
 	if err != nil {
+		log.Fatalln(err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 		return
 	}
@@ -189,7 +189,7 @@ func Sleep(c *gin.Context) {
 	}
 
 	for _, cmd := range device.attritutes.sleepCommands {
-		if err := sendCommand(cmd, "richard", device.ip); err != nil {
+		if err := sendCommand(cmd, device.username, device.ip); err != nil {
 			log.Printf("Command failed: %s", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 			return
