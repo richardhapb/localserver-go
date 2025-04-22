@@ -32,7 +32,8 @@ func CreateServer() {
 
 	manageGroup := router.Group("/manage")
 	{
-		manageGroup.GET("/wake-arch", manage.WakeArch)
+		manageGroup.GET("/wake", manage.Wake)
+		manageGroup.GET("/sleep", manage.Sleep)
 	}
 
 	router.Run(":9000")
