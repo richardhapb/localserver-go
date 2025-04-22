@@ -75,17 +75,24 @@ func WakeArch(c *gin.Context) {
 		return
 	}
 
-
 	if err := sendWOL(mac); err != nil {
 		log.Fatalln(err)
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
 		return
 	}
 
-	if err = sendCommand("wake", "richard", ip); err != nil {
-		log.Fatalln(err)
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
-		return
+	// Execute commands in a single SSH session
+	commands := []string{
+		"export DISPLAY=:0",
+		"DISPLAY=:0 xset dpms force on",
+	}
+
+	for _, cmd := range commands {
+		if err = sendCommand(cmd, "richard", ip); err != nil {
+			log.Printf("Command failed: %s", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Command executed successfully"})
@@ -109,8 +116,8 @@ func captureDeviceIP(name string, devices *devicesResponse) string {
 
 func sendCommand(command, user, host string) error {
 
-	cmd := exec.Command("ssh", "-v", user+"@"+host, command)
-	
+	cmd := exec.Command("ssh", user+"@"+host, command)
+
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -124,7 +131,7 @@ func sendCommand(command, user, host string) error {
 func sendWOL(mac string) error {
 	// Get the MAC address for the target machine from ARP table or configuration
 	cmd := exec.Command("wakeonlan", mac)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("wake-on-lan command failed: %v\nOutput: %s", err, string(output))
@@ -133,4 +140,3 @@ func sendWOL(mac string) error {
 	log.Printf("Wake-on-LAN packet sent to %s: %s", mac, string(output))
 	return nil
 }
-
