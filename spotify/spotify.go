@@ -20,19 +20,19 @@ import (
 
 var (
 	currentEnv *Spotify
-	envs	   = make(map[string]Spotify)
+	envs       = make(map[string]Spotify)
 )
 
 const (
 	CurrentPlaybackEndpoint = "https://api.spotify.com/v1/me/player"
-	RelaxPlaylistUri		= "spotify:playlist:0qPA1tBtiCLVHCUfREECnO"
+	RelaxPlaylistUri        = "spotify:playlist:0qPA1tBtiCLVHCUfREECnO"
 )
 
 type Spotify struct {
 	CallbackUri    string
-	ClientId	   string
+	ClientId       string
 	ClientSecret   string
-	Devices		   []string
+	Devices        []string
 	tokensFilePath string
 }
 
@@ -43,7 +43,7 @@ type Tokens struct {
 
 type Playback struct {
 	Device struct {
-		ID	 string `json:"id"`
+		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"device"`
 	IsActive bool `json:"is_active"`
@@ -221,7 +221,7 @@ func getDeviceId(deviceName string, accessToken string) (string, error) {
 
 	var devicesResponse struct {
 		Devices []struct {
-			ID	 string `json:"id"`
+			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"devices"`
 	}
@@ -317,9 +317,9 @@ func playPlaylist(deviceName string, contextUri string, accessToken string, volu
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	setVolume(volumePercent, accessToken, deviceName)
-	enableShuffle(accessToken, deviceName)
-	enableRepeat(accessToken, deviceName)
+	defer setVolume(volumePercent, accessToken, deviceName)
+	defer enableShuffle(accessToken, deviceName)
+	defer enableRepeat(accessToken, deviceName)
 
 	return makeRequest("PUT", urlStr, accessToken, jsonBody)
 }
@@ -374,9 +374,9 @@ func refreshToken(refreshToken string, sp *Spotify) (string, error) {
 
 	// Use url.Values for proper form encoding
 	data := url.Values{
-		"grant_type":	 {"refresh_token"},
+		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
-		"client_id":	 {sp.ClientId},
+		"client_id":     {sp.ClientId},
 		"client_secret": {sp.ClientSecret},
 	}
 
@@ -406,8 +406,8 @@ func refreshToken(refreshToken string, sp *Spotify) (string, error) {
 
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
-		TokenType	string `json:"token_type"`
-		ExpiresIn	int    `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+		ExpiresIn   int    `json:"expires_in"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
