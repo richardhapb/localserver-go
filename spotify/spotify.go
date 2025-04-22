@@ -73,7 +73,7 @@ func new(environment Environment) *Spotify {
 	log.Println("Creating new Spotify instance")
 
 	if err := godotenv.Load(); err != nil {
-		log.Println(".env not found")
+		log.Fatalln(".env not found")
 		return nil
 	}
 

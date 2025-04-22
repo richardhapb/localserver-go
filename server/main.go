@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/gin-gonic/gin"
 	"localserver/spotify"
+	"localserver/manage"
 	"log"
 )
 
@@ -27,6 +28,11 @@ func CreateServer() {
 			protected.GET("/playlist", spotify.Playlist)
 			protected.GET("/volume", spotify.Volume)
 		}
+	}
+
+	manageGroup := router.Group("/manage")
+	{
+		manageGroup.GET("/wake-arch", manage.WakeArch)
 	}
 
 	router.Run(":9000")
