@@ -3,14 +3,12 @@ package spotify
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +19,8 @@ import (
 
 var (
 	currentEnv *Spotify
-	envs       = make(map[string]Spotify)
+	envs       = make(map[string]*Spotify)
+	debugMode  = os.Getenv("DEBUG") == "true"
 )
 
 const (
@@ -32,11 +31,19 @@ const (
 )
 
 type Spotify struct {
+	Name           string
 	CallbackUri    string
 	ClientId       string
 	ClientSecret   string
-	Devices        []string
+	Devices        []Device
 	tokensFilePath string
+	tokens         *Tokens
+}
+
+type Device struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	IsActive bool   `json:"is_active"`
 }
 
 type Tokens struct {
@@ -45,11 +52,7 @@ type Tokens struct {
 }
 
 type Playback struct {
-	Device struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		IsActive bool   `json:"is_active"`
-	} `json:"device"`
+	Device       Device `json:"device"`
 	RepeatState  string `json:"repeat_state"`
 	ShuffleState bool   `json:"shuffle_state"`
 	Context      struct {
@@ -90,7 +93,7 @@ func new(environment Environment) *Spotify {
 	if _, exists := envs[string(environment)]; exists {
 		sp := envs[string(environment)]
 		log.Println("Returning existent Spotify instance")
-		return &sp
+		return sp
 	}
 	log.Println("Creating new Spotify instance")
 
@@ -105,25 +108,83 @@ func new(environment Environment) *Spotify {
 	switch environment {
 	case Main:
 		envPrefix = "MAIN_"
-		sp.Devices = []string{"iPhone", "MacBook Air de Richard"}
+		sp.Devices = []Device{{"", "iPhone", false}, {"", "MacBook Air de Richard", false}}
 	case Home:
 		envPrefix = "HOME_"
-		sp.Devices = []string{"librespot"}
+		sp.Devices = []Device{{"", "librespot", false}}
 	default:
 		return nil
 	}
 
+	sp.Name = string(environment)
 	sp.ClientId = os.Getenv(envPrefix + "SP_CLIENT_ID")
 	sp.ClientSecret = os.Getenv(envPrefix + "SP_CLIENT_SECRET")
 	sp.CallbackUri = os.Getenv(envPrefix + "SP_CALLBACK_URI")
 	sp.tokensFilePath = fmt.Sprintf(".tokens/.tokens-%s.txt", string(environment))
 
-	envs[string(environment)] = sp
+	if tokens, err := readTokensFromFile(sp.tokensFilePath); err == nil {
+		sp.tokens = tokens
+	} else {
+		log.Printf("tokens not found for %s", sp.Name)
+	}
+
+	envs[string(environment)] = &sp
 	return &sp
 }
 
-func getDeviceId(deviceName string, accessToken string) (string, error) {
+func (sp *Spotify) String() string {
+
+	names := make([]string, 0, len(sp.Devices))
+
+	for _, device := range sp.Devices {
+		names = append(names, device.Name)
+	}
+
+	return fmt.Sprintf("Name: %s, Devices: %v", sp.Name, strings.Join(names, ", "))
+}
+
+func (sp *Spotify) getActiveDevice() *Device {
+	for _, device := range sp.Devices {
+		if device.IsActive {
+			return &device
+		}
+	}
+
+	// Return the first one as the default
+	return &sp.Devices[0]
+}
+
+func (sp *Spotify) getActiveDeviceName() string {
+	if device := sp.getActiveDevice(); device != nil {
+		return device.Name
+	}
+
+	return ""
+}
+
+func (sp *Spotify) getActiveDeviceId() string {
+	if device := sp.getActiveDevice(); device != nil {
+		if device.ID != "" {
+			return device.ID
+		}
+
+		deviceId, err := sp.getDeviceId(sp.getActiveDeviceName())
+		if err == nil {
+			device.ID = deviceId
+			return deviceId
+		}
+		log.Printf("Error getting device ID: %v", err)
+	}
+
+	return ""
+}
+
+func (sp *Spotify) getDeviceId(deviceName string) (string, error) {
 	urlStr := "https://api.spotify.com/v1/me/player/devices"
+
+	if deviceName == "" {
+		return "", fmt.Errorf("device name is empty")
+	}
 
 	log.Println(fmt.Sprintf("Retrieving id for device %s", deviceName))
 
@@ -132,7 +193,7 @@ func getDeviceId(deviceName string, accessToken string) (string, error) {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", sp.tokens.AccessToken))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -173,29 +234,14 @@ func getDeviceId(deviceName string, accessToken string) (string, error) {
 	return deviceId, nil
 }
 
-func schedule(epochMillis int, action func()) {
-	seconds := epochMillis/1000 - int(time.Now().UnixMilli())/1000
-
-	log.Println(fmt.Sprintf("Scheduling task to %d seconds later", seconds))
-
-	if seconds < 0 {
-		log.Println("epochMillis is in the past in schedule function")
-		return
-	}
-
-	go func() {
-		time.Sleep(time.Duration(seconds) * time.Second)
-		action()
-	}()
-}
-
-func makeRequest(method string, urlStr string, accessToken string, body ...[]byte) (*http.Response, error) {
+func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*http.Response, error) {
 	var bodyReader io.Reader
 	if len(body) > 0 {
 		bodyReader = bytes.NewBuffer(body[0])
 	}
 
 	log.Println(fmt.Sprintf("Making request to %s", urlStr))
+
 	req, err := http.NewRequest(method, urlStr, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -204,7 +250,7 @@ func makeRequest(method string, urlStr string, accessToken string, body ...[]byt
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", sp.tokens.AccessToken))
 	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{}
@@ -217,9 +263,9 @@ func makeRequest(method string, urlStr string, accessToken string, body ...[]byt
 	return resp, nil
 }
 
-func setVolume(volumePercent int, accessToken string, deviceName string) (*http.Response, error) {
+func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
 	baseUrl := "https://api.spotify.com/v1/me/player/volume"
-	deviceId, _ := getDeviceId(deviceName, accessToken)
+	deviceId, _ := sp.getDeviceId(sp.getActiveDeviceName())
 
 	params := url.Values{}
 	params.Set("volume_percent", strconv.Itoa(volumePercent))
@@ -227,10 +273,10 @@ func setVolume(volumePercent int, accessToken string, deviceName string) (*http.
 
 	urlStr := baseUrl + "?" + params.Encode()
 
-	return makeRequest("PUT", urlStr, accessToken)
+	return sp.makeRequest("PUT", urlStr)
 }
 
-func playPlaylist(deviceName string, contextUri string, accessToken string, volumePercent int) (*http.Response, error) {
+func (sp *Spotify) playPlaylist(contextUri string, volumePercent int) (*http.Response, error) {
 
 	log.Println(fmt.Sprintf("Playing list with URI %s", contextUri))
 
@@ -242,25 +288,20 @@ func playPlaylist(deviceName string, contextUri string, accessToken string, volu
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	urlStr := appendDeviceId(PlayEndpoint, deviceName, accessToken)
+	urlStr := sp.appendDeviceId(PlayEndpoint)
 
-	defer setVolume(volumePercent, accessToken, deviceName)
-	defer enableShuffle(accessToken, deviceName)
-	defer enableRepeat(accessToken, deviceName)
+	defer sp.setVolume(volumePercent)
+	defer sp.enableShuffle()
+	defer sp.enableRepeat()
 
-	return makeRequest("PUT", urlStr, accessToken, jsonBody)
+	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
 
-func pausePlayback(accessToken string, deviceName ...string) (*http.Response, error) {
+func (sp *Spotify) pausePlayback() (*http.Response, error) {
 	urlStr := "https://api.spotify.com/v1/me/player/pause"
-	deviceN := ""
 	deviceId := ""
 
-	if len(deviceName) == 0 {
-		deviceN = envs[Home].Devices[0]
-	}
-
-	deviceId, _ = getDeviceId(deviceN, accessToken)
+	deviceId = sp.getActiveDeviceId()
 
 	jsonBody, err := json.Marshal(gin.H{
 		"device_id": deviceId,
@@ -270,13 +311,7 @@ func pausePlayback(accessToken string, deviceName ...string) (*http.Response, er
 		log.Println("Error setting the device to pause; continuing with default settings.")
 	}
 
-	return makeRequest("PUT", urlStr, accessToken, jsonBody)
-}
-
-func defaultNotAccessTokenResponse(c *gin.Context) {
-	c.JSON(http.StatusUnauthorized, gin.H{
-		"error": "Access token not found",
-	})
+	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
 
 func getEnvFromDeviceName(deviceName string) *Spotify {
@@ -284,23 +319,27 @@ func getEnvFromDeviceName(deviceName string) *Spotify {
 		return nil
 	}
 
+	log.Printf("Retrieving data for device name: %s\n", deviceName)
+
 	// Loop through environments checking device lists
 	for _, env := range envs {
-		if slices.Contains(env.Devices, deviceName) {
-			log.Println("Device name found, returning instance")
-			return &env
+		for _, device := range env.Devices {
+			if device.Name == deviceName {
+				log.Println("Device name found, returning instance")
+				return env
+			}
 		}
 	}
 
 	return nil
 }
 
-func refreshToken(refreshToken string, sp *Spotify) (string, error) {
+func (sp *Spotify) refreshToken() (string, error) {
 
 	// Use url.Values for proper form encoding
 	data := url.Values{
 		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
+		"refresh_token": {sp.tokens.RefreshToken},
 		"client_id":     {sp.ClientId},
 		"client_secret": {sp.ClientSecret},
 	}
@@ -343,10 +382,12 @@ func refreshToken(refreshToken string, sp *Spotify) (string, error) {
 		return "", fmt.Errorf("no access token in response")
 	}
 
+	sp.tokens.AccessToken = tokenResp.AccessToken
+
 	// Update file with new tokens
 	if err := writeTokensToFile(&Tokens{
 		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: refreshToken,
+		RefreshToken: sp.tokens.RefreshToken,
 	}, sp.tokensFilePath); err != nil {
 		return "", fmt.Errorf("writing tokens: %w", err)
 	}
@@ -354,29 +395,25 @@ func refreshToken(refreshToken string, sp *Spotify) (string, error) {
 	return tokenResp.AccessToken, nil
 }
 
-func enableShuffle(accessToken string, deviceName string) {
+func (sp *Spotify) enableShuffle() {
 	baseUrl := "https://api.spotify.com/v1/me/player/shuffle"
-	urlStr := appendDeviceId(baseUrl, deviceName, accessToken)
+	urlStr := sp.appendDeviceId(baseUrl)
 
-	makeRequest("PUT", urlStr, accessToken)
+	sp.makeRequest("PUT", urlStr)
 }
 
-func enableRepeat(accessToken string, deviceName string) {
+func (sp *Spotify) enableRepeat() {
 	baseUrl := "https://api.spotify.com/v1/me/player/repeat"
 
-	urlStr := appendDeviceId(baseUrl, deviceName, accessToken)
+	urlStr := sp.appendDeviceId(baseUrl)
 
-	makeRequest("PUT", urlStr, accessToken)
+	sp.makeRequest("PUT", urlStr)
 }
 
-func getCurrentPlayback(c *gin.Context) (*Playback, error) {
+func (sp *Spotify) getCurrentPlayback() (*Playback, error) {
 	log.Println("Getting current playback")
-	accessToken, exists := c.Get("access_token")
-	if !exists {
-		return nil, errors.New("no access token available")
-	}
 
-	resp, err := makeRequest("GET", CurrentPlaybackEndpoint, accessToken.(string))
+	resp, err := sp.makeRequest("GET", CurrentPlaybackEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("making request: %w", err)
 	}
@@ -388,6 +425,7 @@ func getCurrentPlayback(c *gin.Context) (*Playback, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		printResponseBody(resp)
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
@@ -400,14 +438,10 @@ func getCurrentPlayback(c *gin.Context) (*Playback, error) {
 	return &playback, nil
 }
 
-func getUserQueue(c *gin.Context) (*UserQueue, error) {
+func (sp *Spotify) getUserQueue() (*UserQueue, error) {
 	log.Println("Getting user queue")
-	accessToken, exists := c.Get("access_token")
-	if !exists {
-		return nil, errors.New("no access token available")
-	}
 
-	resp, err := makeRequest("GET", UserQueueEndpoint, accessToken.(string))
+	resp, err := sp.makeRequest("GET", UserQueueEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("making request: %w", err)
 	}
@@ -419,6 +453,7 @@ func getUserQueue(c *gin.Context) (*UserQueue, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		printResponseBody(resp)
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
@@ -432,41 +467,23 @@ func getUserQueue(c *gin.Context) (*UserQueue, error) {
 }
 
 // Migrate callback from one account to anoter
-func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
-	log.Println("Retrieving tokens")
-
-	fromAccessToken, exists := c.Get("access_token")
-	
-	if !exists {
-		return fmt.Errorf("Access token not found")
+func (sp *Spotify) transferCallback(to *Spotify) error {
+	if to == nil {
+		return fmt.Errorf("destination Spotify instance is nil")
 	}
 
-	toTokens, err := readTokensFromFile(to.tokensFilePath)
+	if _, err := to.refreshToken(); err != nil {
+		return fmt.Errorf("failed to refresh destination token: %w", err)
+	}
 
-
+	playback, err := sp.getCurrentPlayback()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get current playback: %w", err)
 	}
 
-	toAccessToken, err := refreshToken(toTokens.RefreshToken, to)
-
-	if toAccessToken == "" || err != nil {
-		fmt.Println("Access token of the recipient is empty")
-		return err
-	}
-
-	log.Println("Tokens retrieved successfully")
-
-	playback, err := getCurrentPlayback(c)
-
+	userQueue, err := sp.getUserQueue()
 	if err != nil {
-		return err
-	}
-
-	userQueue, err := getUserQueue(c)
-
-	if err != nil {
-		return err
+		return fmt.Errorf("failed to get user queue: %w", err)
 	}
 
 	if len(userQueue.Queue) == 0 || !playback.IsPlaying {
@@ -476,8 +493,17 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 
 	log.Println("Making list of Uris")
 
-	uris := make([]string, 0, len(userQueue.Queue)+1) // Queue + current track
-	uris = append(uris, userQueue.CurrentlyPlaying.Uri)
+	// Queue + current track
+	uris := make([]string, 0, len(userQueue.Queue)+1)
+
+	// Only add currently playing if it has a URI
+	if userQueue.CurrentlyPlaying.Uri != "" {
+		uris = append(uris, userQueue.CurrentlyPlaying.Uri)
+	}
+
+	if len(uris) == 0 {
+		return fmt.Errorf("no valid URIs found to transfer")
+	}
 
 	for _, track := range userQueue.Queue {
 		if track.Uri != "" {
@@ -487,49 +513,67 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 
 	log.Printf("Uris: %v\n", uris)
 
-	log.Println("Pausing playback...")
-	resp, err := pausePlayback(fromAccessToken.(string), from.Devices...)
-
-	if err != nil {
-		return err
+	// First pause current playback
+	if err := sp.pauseCurrentPlayback(); err != nil {
+		return fmt.Errorf("failed to pause current playback: %w", err)
 	}
-
-	defer resp.Body.Close()
-
-	urlStr := appendDeviceId(PlayEndpoint, toName, toAccessToken)
 
 	log.Println("Playing on another device...")
-	resp, err = playUris(toAccessToken, &uris, playback.ProgressMs, urlStr)
-
-	if err != nil {
+	if _, err = to.playUris(uris, playback.ProgressMs); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 
 	return nil
 }
 
-func playUris(accessToken string, uris *[]string, positionMs int, customUrl ...string) (*http.Response, error) {
-	data := gin.H{
-		"uris":        *uris,
-		"position_ms": positionMs,
+func (sp *Spotify) playUris(uris []string, positionMs int) (*http.Response, error) {
+	if len(uris) == 0 {
+		return nil, fmt.Errorf("no URIs provided")
 	}
 
-	log.Printf("Setting data: %v\n", data)
+	data := gin.H{
+		"uris":        uris,
+		"position_ms": positionMs,
+	}
 
 	jsonBody, err := json.Marshal(data)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	log.Printf("Parsed data: %v\n", string(jsonBody))
+	log.Printf("Attempting to play %d track(s) at position %d ms", len(uris), positionMs)
 
-	urlStr := PlayEndpoint
+	urlStr := sp.appendDeviceId(PlayEndpoint)
 
-	if len(customUrl) > 0 {
-		urlStr = customUrl[0]
+	resp, err := sp.makeRequest("PUT", urlStr, jsonBody)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to start playback on destination: %w", err)
 	}
 
-	return makeRequest("PUT", urlStr, accessToken, jsonBody)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to transfer playback (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return resp, err
+}
+
+// Helper method to pause current playback with proper error handling
+func (sp *Spotify) pauseCurrentPlayback() error {
+	resp, err := sp.pausePlayback()
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to pause playback (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }

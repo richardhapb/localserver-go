@@ -1,17 +1,20 @@
 package spotify
 
 import (
-	"strings"
-	"os"
-	"fmt"
-	"log"
 	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"time"
 )
 
 // Update the current active environment
 func updateEnv(newEnv *Spotify) {
-	log.Println(fmt.Sprintf("Settings environment to %s", newEnv.Devices))
+	log.Println(fmt.Sprintf("Settings environment to %v", newEnv))
 	currentEnv = newEnv
 }
 
@@ -76,14 +79,24 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 	return &result, nil
 }
 
-func appendDeviceId(urlStr, deviceName, accessToken string) string {
+func (sp *Spotify) appendDeviceId(urlStr string, deviceName ...string) string {
 
-	deviceId, err := getDeviceId(deviceName, accessToken)
+	log.Printf("Appending device id to url: %s\n", urlStr)
+	log.Printf("With device: %s\n", sp)
 
-    if err != nil {
-        log.Printf("Error getting device ID: %v", err)
-        return urlStr 
-    }
+	var deviceId string
+
+	if len(deviceName) > 0 {
+		var id string
+		var err error
+		if id, err = sp.getDeviceId(deviceName[0]); err != nil {
+			println(err)
+		}
+		deviceId = id
+	}
+	if deviceId == "" {
+		deviceId = sp.getActiveDeviceId()
+	}
 
 	params := url.Values{}
 	if deviceId != "" {
@@ -100,6 +113,32 @@ func appendDeviceId(urlStr, deviceName, accessToken string) string {
 		return urlStr + "&" + encoded
 	}
 
+	log.Printf("Appended %s\n", encoded)
 	return urlStr + "?" + encoded
 }
 
+func schedule(epochMillis int, action func()) {
+	seconds := epochMillis/1000 - int(time.Now().UnixMilli())/1000
+
+	log.Println(fmt.Sprintf("Scheduling task to %d seconds later", seconds))
+
+	if seconds < 0 {
+		log.Println("epochMillis is in the past in schedule function")
+		return
+	}
+
+	go func() {
+		time.Sleep(time.Duration(seconds) * time.Second)
+		action()
+	}()
+}
+
+func printResponseBody(resp *http.Response) {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("Error decoding body: %s", err)
+		return
+	}
+
+	fmt.Println(string(body))
+}

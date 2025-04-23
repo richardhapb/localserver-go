@@ -17,9 +17,11 @@ func SpotifyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		// Initialize
-		if len(envs[Home].Devices) == 0 || len(envs[Main].Devices) == 0 {
-			envs[Home] = *new(Home)
-			envs[Main] = *new(Main)
+		if envs[Home] == nil {
+			envs[Home] = new(Home)
+		}
+		if envs[Main] == nil {
+			envs[Main] = new(Main)
 		}
 
 		reqEnv := c.Query("env")
@@ -28,39 +30,21 @@ func SpotifyMiddleware() gin.HandlerFunc {
 
 		if reqEnv != "" {
 			log.Printf("Retrieving data from env: %s", reqEnv)
-			sp := envs[reqEnv]
-			updateEnv(&sp)
+			updateEnv(envs[reqEnv])
 		} else if deviceName != "" {
-			log.Printf("Retrieving data for device name: %s\n", deviceName)
-			updateEnv(getEnvFromDeviceName(deviceName))
+			if env := getEnvFromDeviceName(deviceName); env != nil {
+				updateEnv(env)
+			}
 		} else if from != "" {
-			log.Printf("Retrieving data for device name: %s\n", from)
-			updateEnv(getEnvFromDeviceName(from))
+			if env := getEnvFromDeviceName(from); env != nil {
+				updateEnv(env)
+			}
 		}
 
-		if currentEnv == nil || currentEnv.tokensFilePath == "" {
-			currentEnv = new(Environment(Home))
-		}
-
-		tokens, err := readTokensFromFile(currentEnv.tokensFilePath)
-
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": fmt.Sprintf("Spotify tokens not found: %s", err),
-			})
-			c.Abort()
-			return
-		}
-
-		accessToken, err := refreshToken(tokens.RefreshToken, currentEnv)
-
-		if err != nil {
+		if _, err := currentEnv.refreshToken(); err != nil {
 			log.Printf("Error refreshing token, setting from file: %s\n", err)
-			accessToken = tokens.AccessToken
 		}
 
-		c.Set("access_token", accessToken)
-		c.Set("refresh_token", tokens.RefreshToken)
 		c.Next()
 	}
 }
@@ -153,6 +137,8 @@ func Callback(c *gin.Context) {
 		return
 	}
 
+	currentEnv.tokens = &tokenResponse
+
 	if err := writeTokensToFile(&tokenResponse, sp.tokensFilePath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save tokens: " + err.Error()})
 		return
@@ -164,24 +150,19 @@ func Callback(c *gin.Context) {
 }
 
 func Pause(c *gin.Context) {
-	device_name := c.Query("device_name")
+	deviceName := c.Query("device_name")
 
-	if device_name == "" {
+	if deviceName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "device_name is required",
 		})
 		return
 	}
 
-	accessToken, exists := c.Get("access_token")
+	sp := getEnvFromDeviceName(deviceName)
 
-	if !exists {
-		defaultNotAccessTokenResponse(c)
-		return
-	}
-
-	if _, err := getCurrentPlayback(c); err == nil {
-		_, err := pausePlayback(accessToken.(string))
+	if _, err := sp.getCurrentPlayback(); err == nil {
+		_, err := sp.pausePlayback()
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"message": "Music paused successfully",
@@ -204,29 +185,19 @@ func Schedule(c *gin.Context) {
 		return
 	}
 
-	accessToken, exists := c.Get("access_token")
-
-	if !exists {
-		defaultNotAccessTokenResponse(c)
-		return
-	}
-
 	var fn func()
-	homeDevice := envs["home"].Devices[0]
 
 	switch action {
 	case "alarm":
 		fn = func() {
-			playPlaylist(
-				homeDevice,
+			currentEnv.playPlaylist(
 				RelaxPlaylistUri,
-				accessToken.(string),
 				60,
 			)
 		}
 	case "sleep":
 		fn = func() {
-			pausePlayback(accessToken.(string))
+			currentEnv.pausePlayback()
 		}
 	}
 
@@ -248,7 +219,8 @@ func Schedule(c *gin.Context) {
 func Playlist(c *gin.Context) {
 	uri := c.Query("uri")
 	volumeStr := c.DefaultQuery("volume", "80")
-	deviceName := c.DefaultQuery("device_name", currentEnv.Devices[0])
+	deviceName := c.DefaultQuery("device_name", currentEnv.Devices[0].Name)
+	sp := getEnvFromDeviceName(deviceName)
 
 	if uri == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -265,14 +237,7 @@ func Playlist(c *gin.Context) {
 		return
 	}
 
-	accessToken, exists := c.Get("access_token")
-
-	if !exists {
-		defaultNotAccessTokenResponse(c)
-		return
-	}
-
-	resp, err := playPlaylist(deviceName, uri, accessToken.(string), volume)
+	resp, err := sp.playPlaylist(uri, volume)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("Error playing playlist: %v", err),
@@ -305,23 +270,7 @@ func Volume(c *gin.Context) {
 		return
 	}
 
-	accessToken, exists := c.Get("access_token")
-
-	if !exists {
-		defaultNotAccessTokenResponse(c)
-		return
-	}
-
-	currentPlayback, err := getCurrentPlayback(c)
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "There is not a playback currently",
-		})
-		return
-	}
-
-	setVolume(volume, accessToken.(string), currentPlayback.Device.Name)
+	currentEnv.setVolume(volume)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Volume setted successfully",
@@ -349,8 +298,8 @@ func TransferPlayback(c *gin.Context) {
 		return
 	}
 
-	if err := transferCallback(from, to, toName, c); err != nil {
-		log.Println(err)
+	if err := from.transferCallback(to); err != nil {
+		log.Printf("Error transferring callback: %s", err)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": fmt.Sprintf("error transfering playback: %s", err),
 		})
