@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"errors"
+	"net/url"
 )
 
 // Update the current active environment
@@ -73,5 +74,32 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 	}
 
 	return &result, nil
+}
+
+func appendDeviceId(urlStr, deviceName, accessToken string) string {
+
+	deviceId, err := getDeviceId(deviceName, accessToken)
+
+    if err != nil {
+        log.Printf("Error getting device ID: %v", err)
+        return urlStr 
+    }
+
+	params := url.Values{}
+	if deviceId != "" {
+		params.Set("device_id", deviceId)
+	}
+
+	encoded := params.Encode()
+
+	if encoded == "" {
+		return urlStr
+	}
+
+	if strings.Contains(urlStr, "?") {
+		return urlStr + "&" + encoded
+	}
+
+	return urlStr + "?" + encoded
 }
 

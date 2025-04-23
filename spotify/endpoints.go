@@ -175,7 +175,7 @@ func Pause(c *gin.Context) {
 		return
 	}
 
-	if _, err := getCurrentPlayBack(c); err == nil {
+	if _, err := getCurrentPlayback(c); err == nil {
 		_, err := pausePlayback(accessToken.(string))
 		if err == nil {
 			c.JSON(http.StatusOK, gin.H{
@@ -307,7 +307,7 @@ func Volume(c *gin.Context) {
 		return
 	}
 
-	currentPlayback, err := getCurrentPlayBack(c)
+	currentPlayback, err := getCurrentPlayback(c)
 
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -320,5 +320,39 @@ func Volume(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Volume setted successfully",
+	})
+}
+
+func TransferPlayback(c *gin.Context) {
+	fromName := c.Query("from")
+	toName := c.Query("to")
+
+	if fromName == "" || toName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "from and to are required",
+		})
+		return
+	}
+
+	from := getEnvFromDeviceName(fromName)
+	to := getEnvFromDeviceName(toName)
+
+	if from == nil || to == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("invalid devices: %s, %s", fromName, toName),
+		})
+		return
+	}
+
+	if err := transferCallback(from, to, toName, c); err != nil {
+		log.Println(err)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("error transfering playback: %s", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Playback transferred successfully",
 	})
 }

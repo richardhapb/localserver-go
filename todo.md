@@ -1,0 +1,1 @@
+- [ ] Manage access token in Spotify instances
