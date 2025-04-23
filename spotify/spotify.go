@@ -498,7 +498,7 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 	urlStr := appendDeviceId(PlayEndpoint, toName, toAccessToken)
 
 	log.Println("Playing on another device...")
-	resp, err = playUris(playback.Context.Type, toAccessToken, &uris, playback.ProgressMs, urlStr)
+	resp, err = playUris(toAccessToken, &uris, playback.ProgressMs, urlStr)
 
 	if err != nil {
 		return err
@@ -508,7 +508,7 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 	return nil
 }
 
-func playUris(contextType, accessToken string, uris *[]string, positionMs int, customUrl ...string) (*http.Response, error) {
+func playUris(accessToken string, uris *[]string, positionMs int, customUrl ...string) (*http.Response, error) {
 	data := gin.H{
 		"uris":        *uris,
 		"position_ms": positionMs,

@@ -24,6 +24,7 @@ func SpotifyMiddleware() gin.HandlerFunc {
 
 		reqEnv := c.Query("env")
 		deviceName, _ := url.QueryUnescape(c.Query("device_name"))
+		from, _ := url.QueryUnescape(c.Query("from"))
 
 		if reqEnv != "" {
 			log.Printf("Retrieving data from env: %s", reqEnv)
@@ -32,6 +33,9 @@ func SpotifyMiddleware() gin.HandlerFunc {
 		} else if deviceName != "" {
 			log.Printf("Retrieving data for device name: %s\n", deviceName)
 			currentEnv = getEnvFromDeviceName(deviceName)
+		} else if from != "" {
+			log.Printf("Retrieving data for device name: %s\n", from)
+			currentEnv = getEnvFromDeviceName(from)
 		}
 
 		if currentEnv == nil || currentEnv.tokensFilePath == "" {
@@ -89,6 +93,7 @@ func Login(c *gin.Context) {
 		"user-modify-playback-state",
 		"user-read-currently-playing",
 		"app-remote-control",
+		"user-read-recently-played",
 	}
 	scope := strings.Join(scopeList, " ")
 
