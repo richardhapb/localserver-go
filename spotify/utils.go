@@ -79,43 +79,27 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 	return &result, nil
 }
 
-func (sp *Spotify) appendDeviceId(urlStr string, deviceName ...string) string {
-
-	log.Printf("Appending device id to url: %s\n", urlStr)
-	log.Printf("With device: %s\n", sp)
-
-	var deviceId string
-
-	if len(deviceName) > 0 {
-		var id string
-		var err error
-		if id, err = sp.getDeviceId(deviceName[0]); err != nil {
-			println(err)
-		}
-		deviceId = id
+func (sp *Spotify) appendDeviceId(baseUrl string) string {
+	// When running on the "home" (librespot) environment, omit the device_id query parameter.
+	// This avoids triggering Spotify’s unofficial client restrictions.
+	if sp.Name == "home" {
+		return baseUrl
 	}
+	deviceId := sp.getActiveDeviceId()
 	if deviceId == "" {
-		deviceId = sp.getActiveDeviceId()
+		return baseUrl
 	}
-
-	params := url.Values{}
-	if deviceId != "" {
-		params.Set("device_id", deviceId)
+	u, err := url.Parse(baseUrl)
+	if err != nil {
+		log.Printf("Error parsing URL: %v", err)
+		return baseUrl
 	}
-
-	encoded := params.Encode()
-
-	if encoded == "" {
-		return urlStr
-	}
-
-	if strings.Contains(urlStr, "?") {
-		return urlStr + "&" + encoded
-	}
-
-	log.Printf("Appended %s\n", encoded)
-	return urlStr + "?" + encoded
+	q := u.Query()
+	q.Set("device_id", deviceId)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
+
 
 func schedule(epochMillis int, action func()) {
 	seconds := epochMillis/1000 - int(time.Now().UnixMilli())/1000

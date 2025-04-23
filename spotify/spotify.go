@@ -554,7 +554,7 @@ func (sp *Spotify) playUris(uris []string, positionMs int) (*http.Response, erro
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("failed to transfer playback (status %d): %s", resp.StatusCode, string(body))
 	}
