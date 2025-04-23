@@ -43,14 +43,13 @@ type deviceData struct {
 func new() *[]deviceAttributes {
 	var da []deviceAttributes
 	da = append(da, deviceAttributes{
-		name:   "mac",
+		name:   "macbook",
 		macEnv: "MAC_MAC",
 		wakeCommands: []string{
 			"caffeinate -u -t 1",
-			"pmset displaysleep 0",
 		},
 		sleepCommands: []string{
-			"pmset displaysleep 1",
+			"pmset sleepnow",
 		},
 	})
 
