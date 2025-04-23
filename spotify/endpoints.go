@@ -298,7 +298,7 @@ func TransferPlayback(c *gin.Context) {
 		return
 	}
 
-	if err := from.transferCallback(to); err != nil {
+	if err := from.transferPlayback(to); err != nil {
 		log.Printf("Error transferring callback: %s", err)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": fmt.Sprintf("error transfering playback: %s", err),

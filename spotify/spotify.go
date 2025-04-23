@@ -467,7 +467,7 @@ func (sp *Spotify) getUserQueue() (*UserQueue, error) {
 }
 
 // Migrate callback from one account to anoter
-func (sp *Spotify) transferCallback(to *Spotify) error {
+func (sp *Spotify) transferPlayback(to *Spotify) error {
 	if to == nil {
 		return fmt.Errorf("destination Spotify instance is nil")
 	}

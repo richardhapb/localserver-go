@@ -80,11 +80,6 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 }
 
 func (sp *Spotify) appendDeviceId(baseUrl string) string {
-	// When running on the "home" (librespot) environment, omit the device_id query parameter.
-	// This avoids triggering Spotify’s unofficial client restrictions.
-	if sp.Name == "home" {
-		return baseUrl
-	}
 	deviceId := sp.getActiveDeviceId()
 	if deviceId == "" {
 		return baseUrl
