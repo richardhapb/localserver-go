@@ -29,13 +29,13 @@ func SpotifyMiddleware() gin.HandlerFunc {
 		if reqEnv != "" {
 			log.Printf("Retrieving data from env: %s", reqEnv)
 			sp := envs[reqEnv]
-			currentEnv = &sp
+			updateEnv(&sp)
 		} else if deviceName != "" {
 			log.Printf("Retrieving data for device name: %s\n", deviceName)
-			currentEnv = getEnvFromDeviceName(deviceName)
+			updateEnv(getEnvFromDeviceName(deviceName))
 		} else if from != "" {
 			log.Printf("Retrieving data for device name: %s\n", from)
-			currentEnv = getEnvFromDeviceName(from)
+			updateEnv(getEnvFromDeviceName(from))
 		}
 
 		if currentEnv == nil || currentEnv.tokensFilePath == "" {

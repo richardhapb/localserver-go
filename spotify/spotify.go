@@ -145,9 +145,9 @@ func getDeviceId(deviceName string, accessToken string) (string, error) {
 
 	var devicesResponse struct {
 		Devices []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-			IsActive bool `json:"is_active"`
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			IsActive bool   `json:"is_active"`
 		} `json:"devices"`
 	}
 
@@ -435,15 +435,14 @@ func getUserQueue(c *gin.Context) (*UserQueue, error) {
 func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 	log.Println("Retrieving tokens")
 
-	fromTokens, err := readTokensFromFile(from.tokensFilePath)
-
-	if err != nil {
-		return err
+	fromAccessToken, exists := c.Get("access_token")
+	
+	if !exists {
+		return fmt.Errorf("Access token not found")
 	}
 
-	fromAccessToken, err := refreshToken(fromTokens.RefreshToken, from)
-
 	toTokens, err := readTokensFromFile(to.tokensFilePath)
+
 
 	if err != nil {
 		return err
@@ -451,8 +450,9 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 
 	toAccessToken, err := refreshToken(toTokens.RefreshToken, to)
 
-	if fromAccessToken == "" || toAccessToken == "" {
-		return fmt.Errorf("There are empty access tokens")
+	if toAccessToken == "" || err != nil {
+		fmt.Println("Access token of the recipient is empty")
+		return err
 	}
 
 	log.Println("Tokens retrieved successfully")
@@ -488,11 +488,12 @@ func transferCallback(from, to *Spotify, toName string, c *gin.Context) error {
 	log.Printf("Uris: %v\n", uris)
 
 	log.Println("Pausing playback...")
-	resp, err := pausePlayback(fromAccessToken, from.Devices...)
+	resp, err := pausePlayback(fromAccessToken.(string), from.Devices...)
 
 	if err != nil {
 		return err
 	}
+
 	defer resp.Body.Close()
 
 	urlStr := appendDeviceId(PlayEndpoint, toName, toAccessToken)
