@@ -60,11 +60,12 @@ func new() *[]deviceAttributes {
 		name:   "arch-richard",
 		macEnv: "MAC_ARCH",
 		wakeCommands: []string{
-			"export DISPLAY=:0",
+			"DISPLAY=:0 xset dpms 0 0 600",
 			"DISPLAY=:0 xset dpms force on",
 		},
 		sleepCommands: []string{
-			"DISPLAY=:0 xset dpms force off",
+			"DISPLAY=:0 xset dpms 0 0 5",
+			"DISPLAY=:0 i3lock -n -c 000000 >/dev/null 2>&1 &",
 		},
 		battCommand: "cat /sys/class/power_supply/BAT1/capacity",
 	})
