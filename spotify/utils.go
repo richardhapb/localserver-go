@@ -121,3 +121,22 @@ func printResponseBody(resp *http.Response) {
 
 	fmt.Println(string(body))
 }
+
+// Extract the id from a playlist URI
+// Example:
+// parsePlaylistId("spotify:playlist:0qPA1tBtiCLVHCUfREECnO")
+// returns "0qPA1tBtiCLVHCUfREECnO", nil
+func parsePlaylistId(playlistUri string) (string, error) {
+	if !strings.Contains(playlistUri, ":playlist:") {
+		return "", fmt.Errorf("Playlist URI is invalid: %s", playlistUri)
+	}
+
+	parts := strings.SplitN(playlistUri, ":", 3)
+
+	if len(parts) < 3 {
+		return "", fmt.Errorf("Playlist URI is invalid: %s", playlistUri)
+	}
+
+	return parts[2], nil
+}
+

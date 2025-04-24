@@ -68,11 +68,10 @@ type Playback struct {
 }
 
 type Track struct {
-	Type        string `json:"type"`
-	Name        string `json:"name"`
-	Uri         string `json:"uri"`
-	DurationMs  int    `json:"duration_ms"`
-	TrackNumber int    `json:"track_number"`
+	Type       string `json:"type"`
+	Name       string `json:"name"`
+	Uri        string `json:"uri"`
+	DurationMs int    `json:"duration_ms"`
 }
 
 type UserQueue struct {
@@ -334,7 +333,7 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 		sp.setVolume(volumePercent)
 	}
 
-	sp.enableShuffle()
+	sp.toggleShuffle(true)
 	sp.enableRepeat("context")
 
 	return sp.makeRequest("PUT", urlStr, jsonBody)
@@ -435,8 +434,15 @@ func (sp *Spotify) refreshToken() (string, error) {
 	return tokenResp.AccessToken, nil
 }
 
-func (sp *Spotify) enableShuffle() {
-	baseUrl := "https://api.spotify.com/v1/me/player/shuffle?state=true"
+func (sp *Spotify) toggleShuffle(state bool) {
+	stateStr := ""
+	if state {
+		stateStr = "true"
+	} else {
+		stateStr = "false"
+	}
+
+	baseUrl := fmt.Sprintf("https://api.spotify.com/v1/me/player/shuffle?state=%s", stateStr)
 	urlStr := sp.appendDeviceId(baseUrl)
 
 	sp.makeRequest("PUT", urlStr)
@@ -652,7 +658,8 @@ func (sp *Spotify) hardTransferPlayback(to *Spotify) error {
 		return fmt.Errorf("There is no context currently playing.")
 	}
 
-	resp, err := to.playPlaylist(playback.Context.Uri, volume, playback.Item.TrackNumber, playback.ProgressMs)
+	trackNumber := to.getTrackNumber(playback.Context.Uri, playback.Item.Name)
+	resp, err := to.playPlaylist(playback.Context.Uri, volume, trackNumber, playback.ProgressMs)
 
 	if err != nil {
 		return fmt.Errorf("error playing uris: %s", err)
@@ -661,4 +668,71 @@ func (sp *Spotify) hardTransferPlayback(to *Spotify) error {
 	defer resp.Body.Close()
 
 	return nil
+}
+
+func (sp *Spotify) getTrackNumber(playlistUri, trackName string) int {
+	if playlistUri == "" || trackName == "" {
+		return 0
+	}
+
+	playlistId, err := parsePlaylistId(playlistUri)
+	if err != nil {
+		log.Printf("Error parsing playlist id: %s", err)
+		return 0
+	}
+
+	// Spotify API endpoint
+	baseUrl := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s/tracks", playlistId)
+
+	// Query parameters
+	query := url.Values{
+		"fields": {"items(track(name)),next"}, // Only fetch track names
+		"limit":  {"100"},                     // Maximum allowed by Spotify
+		"offset": {"0"},
+	}
+
+	type trackPage struct {
+		Items []struct {
+			Track struct {
+				Name string `json:"name"`
+			} `json:"track"`
+		} `json:"items"`
+		Next string `json:"next"`
+	}
+
+	offset := 0
+	for {
+		query.Set("offset", strconv.Itoa(offset))
+		urlStr := baseUrl + "?" + query.Encode()
+
+		resp, err := sp.makeRequest("GET", urlStr)
+		if err != nil {
+			log.Printf("Failed to fetch tracks: %s", err)
+			return 0
+		}
+
+		var page trackPage
+		err = json.NewDecoder(resp.Body).Decode(&page)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to decode response: %s", err)
+			return 0
+		}
+
+		// Search for track in current page
+		for i, item := range page.Items {
+			if item.Track.Name == trackName {
+				return offset + i
+			}
+		}
+
+		// Break if no more pages
+		if page.Next == "" {
+			break
+		}
+
+		offset += len(page.Items)
+	}
+
+	return 0
 }
