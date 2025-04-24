@@ -149,6 +149,29 @@ func Callback(c *gin.Context) {
 	})
 }
 
+func Play(c *gin.Context) {
+	deviceName := c.Query("device_name")
+
+	if deviceName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "device_name is required",
+		})
+		return
+	}
+
+	sp := getEnvFromDeviceName(deviceName)
+
+	_, err := sp.playPlayback()
+	if err == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Music playing successfully",
+		})
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": "failed to play playback"})
+}
+
 func Pause(c *gin.Context) {
 	deviceName := c.Query("device_name")
 
@@ -161,14 +184,12 @@ func Pause(c *gin.Context) {
 
 	sp := getEnvFromDeviceName(deviceName)
 
-	if _, err := sp.getCurrentPlayback(); err == nil {
-		_, err := sp.pausePlayback()
-		if err == nil {
-			c.JSON(http.StatusOK, gin.H{
-				"message": "Music paused successfully",
-			})
-			return
-		}
+	_, err := sp.pausePlayback()
+	if err == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Music paused successfully",
+		})
+		return
 	}
 
 	c.JSON(http.StatusBadRequest, gin.H{"error": "failed to pause playback"})

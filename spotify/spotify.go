@@ -97,9 +97,8 @@ var EnvironmentName = map[Environment]string{
 func new(environment Environment) *Spotify {
 	// If exists return it, this avoid duplicates instances
 	if _, exists := envs[string(environment)]; exists {
-		sp := envs[string(environment)]
 		log.Println("Returning existent Spotify instance")
-		return sp
+		return envs[string(environment)]
 	}
 	log.Println("Creating new Spotify instance")
 
@@ -336,21 +335,18 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
 
+func (sp *Spotify) playPlayback() (*http.Response, error) {
+	urlStr := sp.appendDeviceId(PlayEndpoint)
+
+	return sp.makeRequest("PUT", urlStr)
+}
+
 func (sp *Spotify) pausePlayback() (*http.Response, error) {
-	urlStr := "https://api.spotify.com/v1/me/player/pause"
-	deviceId := ""
+	baseUrl := "https://api.spotify.com/v1/me/player/pause"
 
-	deviceId = sp.getActiveDeviceId()
+	urlStr := sp.appendDeviceId(baseUrl)
 
-	jsonBody, err := json.Marshal(gin.H{
-		"device_id": deviceId,
-	})
-
-	if err != nil {
-		log.Println("Error setting the device to pause; continuing with default settings.")
-	}
-
-	return sp.makeRequest("PUT", urlStr, jsonBody)
+	return sp.makeRequest("PUT", urlStr)
 }
 
 func getEnvFromDeviceName(deviceName string) *Spotify {

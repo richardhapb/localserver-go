@@ -23,6 +23,7 @@ func CreateServer() {
 		protected := spotifyGroup.Group("")
 		protected.Use(spotify.SpotifyMiddleware())
 		{
+			protected.GET("/play", spotify.Play)
 			protected.GET("/pause", spotify.Pause)
 			protected.GET("/schedule", spotify.Schedule)
 			protected.GET("/playlist", spotify.Playlist)
