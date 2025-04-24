@@ -39,6 +39,9 @@ func SpotifyMiddleware() gin.HandlerFunc {
 			if env := getEnvFromDeviceName(from); env != nil {
 				updateEnv(env)
 			}
+		} else {
+			// Home as default
+			updateEnv(envs[Home])
 		}
 
 		if _, err := currentEnv.refreshToken(); err != nil {
@@ -285,13 +288,24 @@ func Volume(c *gin.Context) {
 	volume, err := strconv.Atoi(percentage)
 
 	if err != nil {
+		log.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "percentage must be a number",
 		})
 		return
 	}
 
-	currentEnv.setVolume(volume)
+	resp, err := currentEnv.setVolume(volume)
+
+	if err != nil {
+		log.Println(err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	resp.Body.Close()
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Volume setted successfully",

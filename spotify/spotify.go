@@ -117,7 +117,7 @@ func new(environment Environment) *Spotify {
 		sp.Devices = []Device{{"", "iPhone", false, defaultVolume, false}, {"", "MacBook Air de Richard", false, defaultVolume, true}}
 	case Home:
 		envPrefix = "HOME_"
-		sp.Devices = []Device{{"", "librespot", false, defaultVolume, false}}
+		sp.Devices = []Device{{"", "librespot", false, defaultVolume, true}}
 	default:
 		return nil
 	}
@@ -276,20 +276,25 @@ func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*h
 }
 
 func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
-
 	device := sp.getActiveDevice()
 
 	if device == nil {
 		return nil, fmt.Errorf("device not found")
 	}
 
+	log.Println(device)
+
 	if !device.SupportsVolume {
 		return nil, fmt.Errorf("device doesn't support volume")
 	}
 
-	baseUrl := "https://api.spotify.com/v1/me/player/volume"
-	deviceId, _ := sp.getDeviceId(device.Name)
 	log.Printf("Setting volume to %d", volumePercent)
+
+	baseUrl := "https://api.spotify.com/v1/me/player/volume"
+	deviceId, err := sp.getDeviceId(device.Name)
+	if err != nil {
+		return nil, fmt.Errorf("Error getting device Id: %s", err)
+	}
 
 	params := url.Values{}
 	params.Set("volume_percent", strconv.Itoa(volumePercent))
