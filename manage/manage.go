@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -30,6 +31,7 @@ type deviceAttributes struct {
 	macEnv        string
 	wakeCommands  []string
 	sleepCommands []string
+	battCommand   string
 }
 
 type deviceData struct {
@@ -51,6 +53,7 @@ func new() *[]deviceAttributes {
 		sleepCommands: []string{
 			"pmset sleepnow",
 		},
+		battCommand: "pmset -g batt | grep -o '[0-9]\\+%' | sed 's/%//' ",
 	})
 
 	da = append(da, deviceAttributes{
@@ -63,6 +66,7 @@ func new() *[]deviceAttributes {
 		sleepCommands: []string{
 			"DISPLAY=:0 xset dpms force off",
 		},
+		battCommand: "cat /sys/class/power_supply/BAT1/capacity",
 	})
 
 	return &da
@@ -161,7 +165,7 @@ func Wake(c *gin.Context) {
 	}
 
 	for _, cmd := range device.attritutes.wakeCommands {
-		if err := sendCommand(cmd, device.username, device.ip); err != nil {
+		if _, err := sendCommand(cmd, device.username, device.ip); err != nil {
 			log.Printf("Command failed: %s", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 			return
@@ -188,7 +192,7 @@ func Sleep(c *gin.Context) {
 	}
 
 	for _, cmd := range device.attritutes.sleepCommands {
-		if err := sendCommand(cmd, device.username, device.ip); err != nil {
+		if _, err := sendCommand(cmd, device.username, device.ip); err != nil {
 			log.Printf("Command failed: %s", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 			return
@@ -196,6 +200,24 @@ func Sleep(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Command executed successfully"})
+}
+
+func Battery(c *gin.Context) {
+	device, err := validateRequest(c)
+
+	if err != nil {
+		log.Printf("Command failed: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+		return
+	}
+
+	if batt, err := sendCommand(device.attritutes.battCommand, device.username, device.ip); err == nil {
+		log.Printf("Battery of %s: %s", device.name, batt)
+		c.JSON(http.StatusOK, gin.H{"battery": batt})
+	} else {
+		log.Printf("Command failed: %s\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+	}
 }
 
 func captureDeviceIP(name string, devices *devicesResponse) string {
@@ -214,18 +236,19 @@ func captureDeviceIP(name string, devices *devicesResponse) string {
 	return ""
 }
 
-func sendCommand(command, user, host string) error {
+func sendCommand(command, user, host string) (string, error) {
 
 	cmd := exec.Command("ssh", user+"@"+host, command)
 
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("SSH command failed: %v\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("SSH command failed: %v\nOutput: %s", err, string(output))
 	}
 
 	log.Printf("Command '%s' executed successfully on %s@%s", command, user, host)
-	return nil
+
+	return strings.TrimSpace(string(output)), nil
 }
 
 func sendWOL(mac string) error {
