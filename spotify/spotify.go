@@ -41,9 +41,11 @@ type Spotify struct {
 }
 
 type Device struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	IsActive bool   `json:"is_active"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	IsActive       bool   `json:"is_active"`
+	VolumenPercent int    `json:"volume_percent"`
+	SupportsVolume bool   `json:"supports_volume"`
 }
 
 type Tokens struct {
@@ -59,14 +61,18 @@ type Playback struct {
 		Type string `json:"type"`
 		Uri  string `json:"uri"`
 	} `json:"context"`
-	ProgressMs int  `json:"progress_ms"`
-	IsPlaying  bool `json:"is_playing"`
+	ProgressMs int   `json:"progress_ms"`
+	IsPlaying  bool  `json:"is_playing"`
+	Timestamp  int   `json:"timestamp"`
+	Item       Track `json:"item"`
 }
 
 type Track struct {
-	Type string `json:"type"`
-	Name string `json:"name"`
-	Uri  string `json:"uri"`
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Uri         string `json:"uri"`
+	DurationMs  int    `json:"duration_ms"`
+	TrackNumber int    `json:"track_number"`
 }
 
 type UserQueue struct {
@@ -104,14 +110,15 @@ func new(environment Environment) *Spotify {
 
 	var sp Spotify
 	envPrefix := ""
+	defaultVolume := 50
 
 	switch environment {
 	case Main:
 		envPrefix = "MAIN_"
-		sp.Devices = []Device{{"", "iPhone", false}, {"", "MacBook Air de Richard", false}}
+		sp.Devices = []Device{{"", "iPhone", false, defaultVolume, false}, {"", "MacBook Air de Richard", false, defaultVolume, true}}
 	case Home:
 		envPrefix = "HOME_"
-		sp.Devices = []Device{{"", "librespot", false}}
+		sp.Devices = []Device{{"", "librespot", false, defaultVolume, false}}
 	default:
 		return nil
 	}
@@ -260,12 +267,30 @@ func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*h
 	}
 
 	log.Println(fmt.Sprintf("Request status: %s", resp.Status))
+
+	if resp.StatusCode == http.StatusBadRequest {
+		fmt.Println("Bad request:")
+		printResponseBody(resp)
+	}
+
 	return resp, nil
 }
 
 func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
+
+	device := sp.getActiveDevice()
+
+	if device == nil {
+		return nil, fmt.Errorf("device not found")
+	}
+
+	if !device.SupportsVolume {
+		return nil, fmt.Errorf("device doesn't support volume")
+	}
+
 	baseUrl := "https://api.spotify.com/v1/me/player/volume"
-	deviceId, _ := sp.getDeviceId(sp.getActiveDeviceName())
+	deviceId, _ := sp.getDeviceId(device.Name)
+	log.Printf("Setting volume to %d", volumePercent)
 
 	params := url.Values{}
 	params.Set("volume_percent", strconv.Itoa(volumePercent))
@@ -276,23 +301,37 @@ func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
 	return sp.makeRequest("PUT", urlStr)
 }
 
-func (sp *Spotify) playPlaylist(contextUri string, volumePercent int) (*http.Response, error) {
+func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...int) (*http.Response, error) {
+	log.Printf("Playing list with URI %s", contextUri)
 
-	log.Println(fmt.Sprintf("Playing list with URI %s", contextUri))
-
-	jsonBody, err := json.Marshal(gin.H{
+	requestBody := map[string]any{
 		"context_uri": contextUri,
-	})
+		"position_ms": 0,
+	}
+	if len(args) > 0 {
+		requestBody["offset"] = map[string]int{
+			"position": args[0],
+		}
+	}
+	if len(args) > 1 {
+		requestBody["position_ms"] = args[1]
+	}
 
+	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
 	urlStr := sp.appendDeviceId(PlayEndpoint)
 
-	defer sp.setVolume(volumePercent)
-	defer sp.enableShuffle()
-	defer sp.enableRepeat()
+	device := sp.getActiveDevice()
+
+	if device != nil && device.SupportsVolume {
+		sp.setVolume(volumePercent)
+	}
+
+	sp.enableShuffle()
+	sp.enableRepeat("context")
 
 	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
@@ -396,14 +435,20 @@ func (sp *Spotify) refreshToken() (string, error) {
 }
 
 func (sp *Spotify) enableShuffle() {
-	baseUrl := "https://api.spotify.com/v1/me/player/shuffle"
+	baseUrl := "https://api.spotify.com/v1/me/player/shuffle?state=true"
 	urlStr := sp.appendDeviceId(baseUrl)
 
 	sp.makeRequest("PUT", urlStr)
 }
 
-func (sp *Spotify) enableRepeat() {
-	baseUrl := "https://api.spotify.com/v1/me/player/repeat"
+// Possibles states:
+// track, context or off.
+// track will repeat the current track.
+// context will repeat the current context.
+// off will turn repeat off.
+// Example: state=context
+func (sp *Spotify) enableRepeat(state string) {
+	baseUrl := fmt.Sprintf("https://api.spotify.com/v1/me/player/repeat?state=%s", state)
 
 	urlStr := sp.appendDeviceId(baseUrl)
 
@@ -574,6 +619,45 @@ func (sp *Spotify) pauseCurrentPlayback() error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to pause playback (status %d): %s", resp.StatusCode, string(body))
 	}
+
+	return nil
+}
+
+func (sp *Spotify) hardTransferPlayback(to *Spotify) error {
+	if to == nil {
+		return fmt.Errorf("destination Spotify instance is nil")
+	}
+
+	playback, err := sp.getCurrentPlayback()
+
+	if err != nil {
+		return fmt.Errorf("error retrieving currrent playback: %s", err)
+	}
+
+	volume := 50 // TODO: Make this dynamic
+
+	if playback.Device.SupportsVolume {
+		// Get the volume if it is supported
+		volume = playback.Device.VolumenPercent
+	}
+
+	// Transfer current track
+	err = sp.pauseCurrentPlayback()
+	if err != nil {
+		return fmt.Errorf("error pausing current playback")
+	}
+
+	if playback.Context.Uri == "" {
+		return fmt.Errorf("There is no context currently playing.")
+	}
+
+	resp, err := to.playPlaylist(playback.Context.Uri, volume, playback.Item.TrackNumber, playback.ProgressMs)
+
+	if err != nil {
+		return fmt.Errorf("error playing uris: %s", err)
+	}
+
+	defer resp.Body.Close()
 
 	return nil
 }

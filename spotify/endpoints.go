@@ -298,7 +298,18 @@ func TransferPlayback(c *gin.Context) {
 		return
 	}
 
-	if err := from.transferPlayback(to); err != nil {
+	var err error
+
+	// Librespot does not allow playing a queue directly.
+	// For it, i need to transfer the current song and schedule the playlist.
+	if toName == "librespot" || toName == "iPhone" {
+		err = from.hardTransferPlayback(to)
+	} else {
+		// TODO: Evaluate whether this is necessary; if not, remove it.
+		err = from.transferPlayback(to)
+	}
+
+	if err != nil {
 		log.Printf("Error transferring callback: %s", err)
 		c.JSON(http.StatusBadGateway, gin.H{
 			"error": fmt.Sprintf("error transfering playback: %s", err),
