@@ -212,6 +212,12 @@ func Battery(c *gin.Context) {
 		return
 	}
 
+	if err := sendWOL(device.mac); err != nil {
+		log.Fatalln(err)
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
+		return
+	}
+
 	if batt, err := sendCommand(device.attritutes.battCommand, device.username, device.ip); err == nil {
 		log.Printf("Battery of %s: %s", device.name, batt)
 		c.JSON(http.StatusOK, gin.H{"battery": batt})
