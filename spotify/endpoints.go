@@ -234,7 +234,7 @@ func Schedule(c *gin.Context) {
 		return
 	}
 
-	schedule(epochMillis, fn)
+	schedule(int64(epochMillis), fn)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Schedule setted successfully",
 	})

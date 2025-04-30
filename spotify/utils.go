@@ -95,19 +95,18 @@ func (sp *Spotify) appendDeviceId(baseUrl string) string {
 	return u.String()
 }
 
+func schedule(epochMillis int64, action func()) {
+    delayMillis := epochMillis - time.Now().UnixMilli()
 
-func schedule(epochMillis int, action func()) {
-	seconds := epochMillis/1000 - int(time.Now().UnixMilli())/1000
+	log.Println(fmt.Sprintf("Scheduling task to %d seconds later", delayMillis / 1000))
 
-	log.Println(fmt.Sprintf("Scheduling task to %d seconds later", seconds))
-
-	if seconds < 0 {
+	if delayMillis < 0 {
 		log.Println("epochMillis is in the past in schedule function")
 		return
 	}
 
 	go func() {
-		time.Sleep(time.Duration(seconds) * time.Second)
+		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
 		action()
 	}()
 }
@@ -131,12 +130,11 @@ func parsePlaylistId(playlistUri string) (string, error) {
 		return "", fmt.Errorf("Playlist URI is invalid: %s", playlistUri)
 	}
 
-	parts := strings.SplitN(playlistUri, ":", 3)
+	parts := strings.Split(playlistUri, ":")
 
-	if len(parts) < 3 {
+	if len(parts) != 3 {
 		return "", fmt.Errorf("Playlist URI is invalid: %s", playlistUri)
 	}
 
 	return parts[2], nil
 }
-
