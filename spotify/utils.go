@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -77,22 +76,6 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 	}
 
 	return &result, nil
-}
-
-func (sp *Spotify) appendDeviceId(baseUrl string) string {
-	deviceId := sp.getActiveDeviceId()
-	if deviceId == "" {
-		return baseUrl
-	}
-	u, err := url.Parse(baseUrl)
-	if err != nil {
-		log.Printf("Error parsing URL: %v", err)
-		return baseUrl
-	}
-	q := u.Query()
-	q.Set("device_id", deviceId)
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 func schedule(epochMillis int64, action func()) {

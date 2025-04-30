@@ -1,9 +1,72 @@
 package spotify
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestWriteTokensToFile(t *testing.T) {
+	tempFile, err := os.CreateTemp("", "tokens")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	tokens := Tokens{
+		AccessToken:  "test_access",
+		RefreshToken: "test_refresh",
+	}
+
+	if err := writeTokensToFile(&tokens, tempFile.Name()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seek back to start of file before reading
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(tempFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "access_token:test_access\nrefresh_token:test_refresh"
+	if strings.TrimSpace(string(got)) != want {
+		t.Errorf("got %q, want %q", string(got), want)
+	}
+}
+
+
+func TestReadTokensFromFile(t *testing.T){
+	tempFile, err := os.CreateTemp("", "tokens")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	text := "access_token:test_access\nrefresh_token:test_refresh"
+	tempFile.WriteString(text)
+
+	tokens, err := readTokensFromFile(tempFile.Name())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if tokens.AccessToken != "test_access" {
+		t.Fatalf("Incorrect access token: %s", tokens.AccessToken)
+	}
+	
+	if tokens.RefreshToken != "test_refresh" {
+		t.Fatalf("Incorrect access token: %s", tokens.AccessToken)
+	}
+}
 
 func TestSchedule(t *testing.T) {
 	const deltaMilli = 100

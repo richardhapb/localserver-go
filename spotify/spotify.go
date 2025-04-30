@@ -274,6 +274,22 @@ func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*h
 	return resp, nil
 }
 
+func (sp *Spotify) appendDeviceId(baseUrl string) string {
+	deviceId := sp.getActiveDeviceId()
+	if deviceId == "" {
+		return baseUrl
+	}
+	u, err := url.Parse(baseUrl)
+	if err != nil {
+		log.Printf("Error parsing URL: %v", err)
+		return baseUrl
+	}
+	q := u.Query()
+	q.Set("device_id", deviceId)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
 	device := sp.getActiveDevice()
 
