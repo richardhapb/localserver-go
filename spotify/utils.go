@@ -42,7 +42,7 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 	data, err := os.ReadFile(fileName)
 	result := Tokens{}
 
-	log.Println(fmt.Sprintf("Reading tokens from file %s", fileName))
+	log.Printf("Reading tokens from file %s", fileName)
 
 	if err != nil {
 		return nil, err
@@ -81,7 +81,7 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 func schedule(epochMillis int64, action func()) {
     delayMillis := epochMillis - time.Now().UnixMilli()
 
-	log.Println(fmt.Sprintf("Scheduling task to %d seconds later", delayMillis / 1000))
+	log.Println(fmt.Sprintf("Scheduling task to %d seconds later\n", delayMillis / 1000))
 
 	if delayMillis < 0 {
 		log.Println("epochMillis is in the past in schedule function")
