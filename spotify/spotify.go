@@ -344,33 +344,36 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 			"position": args[0],
 		}
 	} else {
+		id, err := parsePlaylistId(contextUri)
 
-		// Get the length of the playlist to select a random track
-		baseUrl := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", contextUri)
-		query := url.Values{
-			"fields": {"tracks"},
-			"limit":  {"1"},
-			"offset": {"0"},
-		}
-		urlStr := baseUrl + "?" + query.Encode()
+		if err == nil {
+			// Get the length of the playlist to select a random track
+			baseUrl := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", id)
+			query := url.Values{
+				"fields": {"tracks"},
+				"limit":  {"1"},
+				"offset": {"0"},
+			}
+			urlStr := baseUrl + "?" + query.Encode()
 
-		resp, err := sp.makeRequest("GET", urlStr)
+			resp, err := sp.makeRequest("GET", urlStr)
 
-		if err != nil {
-			return nil, fmt.Errorf("Failed to marshal the response body while retrieving the playlist: %w", err)
-		}
+			if err != nil {
+				return nil, fmt.Errorf("Failed to marshal the response body while retrieving the playlist: %w", err)
+			}
 
-		var playlist Playlist
+			var playlist Playlist
 
-		err = json.NewDecoder(resp.Body).Decode(&playlist)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("Failed to decode response: %s", err)
-			return nil, err
-		}
+			err = json.NewDecoder(resp.Body).Decode(&playlist)
+			resp.Body.Close()
+			if err != nil {
+				log.Printf("Failed to decode response: %s", err)
+				return nil, err
+			}
 
-		requestBody["offset"] = map[string]int{
-			"position": rand.Intn(playlist.Tracks.Total),
+			requestBody["offset"] = map[string]int{
+				"position": rand.Intn(playlist.Tracks.Total),
+			}
 		}
 	}
 
