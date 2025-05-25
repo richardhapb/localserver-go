@@ -26,7 +26,7 @@ func CreateServer() {
 			protected.GET("/play", spotify.Play)
 			protected.GET("/pause", spotify.Pause)
 			protected.GET("/schedule", spotify.Schedule)
-			protected.GET("/playlist", spotify.Playlist)
+			protected.GET("/playlist", spotify.PlayPlaylist)
 			protected.GET("/volume", spotify.Volume)
 			protected.GET("/transfer", spotify.TransferPlayback)
 		}

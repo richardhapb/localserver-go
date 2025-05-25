@@ -240,7 +240,7 @@ func Schedule(c *gin.Context) {
 	})
 }
 
-func Playlist(c *gin.Context) {
+func PlayPlaylist(c *gin.Context) {
 	uri := c.Query("uri")
 	volumeStr := c.DefaultQuery("volume", "80")
 	deviceName := c.DefaultQuery("device_name", currentEnv.Devices[0].Name)

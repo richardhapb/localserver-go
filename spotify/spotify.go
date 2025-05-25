@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -65,6 +66,17 @@ type Playback struct {
 	IsPlaying  bool  `json:"is_playing"`
 	Timestamp  int   `json:"timestamp"`
 	Item       Track `json:"item"`
+}
+
+type Playlist struct {
+	Tracks struct {
+		Total int     `json:"total"`
+		Limit int     `json:"limit"`
+		Items []Track `json:"items"`
+	} `json:"tracks"`
+	Description string `json:"description"`
+	Name        string `json:"name"`
+	Public      bool   `json:"public"`
 }
 
 type Track struct {
@@ -331,7 +343,37 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 		requestBody["offset"] = map[string]int{
 			"position": args[0],
 		}
+	} else {
+
+		// Get the length of the playlist to select a random track
+		baseUrl := fmt.Sprintf("https://api.spotify.com/v1/playlists/%s", contextUri)
+		query := url.Values{
+			"fields": {"tracks"},
+			"limit":  {"1"},
+			"offset": {"0"},
+		}
+		urlStr := baseUrl + "?" + query.Encode()
+
+		resp, err := sp.makeRequest("GET", urlStr)
+
+		if err != nil {
+			return nil, fmt.Errorf("Failed to marshal the response body while retrieving the playlist: %w", err)
+		}
+
+		var playlist Playlist
+
+		err = json.NewDecoder(resp.Body).Decode(&playlist)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("Failed to decode response: %s", err)
+			return nil, err
+		}
+
+		requestBody["offset"] = map[string]int{
+			"position": rand.Intn(playlist.Tracks.Total),
+		}
 	}
+
 	if len(args) > 1 {
 		requestBody["position_ms"] = args[1]
 	}
@@ -349,8 +391,11 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 		sp.setVolume(volumePercent)
 	}
 
-	sp.toggleShuffle(true)
-	sp.enableRepeat("context")
+	go func() {
+		time.Sleep(5 * time.Second)
+		sp.toggleShuffle(true)
+		sp.enableRepeat("context")
+	}()
 
 	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
