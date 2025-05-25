@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/warthog618/go-gpiocdev"
 )
 
 type devicesResponse struct {
@@ -42,7 +43,23 @@ type deviceData struct {
 	attritutes *deviceAttributes
 }
 
-func new() *[]deviceAttributes {
+var lamp struct {
+	line *gpiocdev.Line
+	on   bool
+}
+
+func InitializeLamp() error {
+	var err error
+	lamp.line, err = gpiocdev.RequestLine("gpiochip0", 17, gpiocdev.AsOutput(0))
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func newDevicesAttributes() *[]deviceAttributes {
 	var da []deviceAttributes
 	da = append(da, deviceAttributes{
 		name:   "macbook",
@@ -74,7 +91,7 @@ func new() *[]deviceAttributes {
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
-	devices := new()
+	devices := newDevicesAttributes()
 
 	for _, device := range *devices {
 		if device.name == name {
@@ -225,6 +242,29 @@ func Battery(c *gin.Context) {
 		log.Printf("Command failed: %s\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 	}
+}
+
+func ToggleLamp(c *gin.Context) {
+	if lamp.line == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"error": "Raspberry Pi pin 17 is not bound,",
+		})
+	}
+
+	if lamp.on {
+		lamp.line.SetValue(0)
+		lamp.on = false
+		c.JSON(http.StatusOK, gin.H{
+			"status": "Lamp off",
+		})
+		return
+	}
+
+	lamp.line.SetValue(1)
+	lamp.on = true
+	c.JSON(http.StatusOK, gin.H{
+		"status": "Lamp on",
+	})
 }
 
 func captureDeviceIP(name string, devices *devicesResponse) string {

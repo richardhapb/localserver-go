@@ -37,6 +37,7 @@ func CreateServer() {
 		manageGroup.GET("/wake", manage.Wake)
 		manageGroup.GET("/sleep", manage.Sleep)
 		manageGroup.GET("/battery", manage.Battery)
+		manageGroup.GET("/lamp", manage.ToggleLamp)
 	}
 
 	router.Run(":9000")
