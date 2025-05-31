@@ -160,16 +160,52 @@ func (sp *Spotify) String() string {
 	return fmt.Sprintf("Name: %s, Devices: %v", sp.Name, strings.Join(names, ", "))
 }
 
+func (sp *Spotify) updateDevicesData() error {
+	urlStr := "https://api.spotify.com/v1/me/player/devices"
+
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", sp.tokens.AccessToken))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return fmt.Errorf("Failed to execute request: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	var devicesResponse struct {
+		Devices []Device `json:"devices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+		return fmt.Errorf("Failed in request when retrieving device: %w", err)
+	}
+
+	for _, device := range devicesResponse.Devices {
+		for i := range sp.Devices {
+			if sp.Devices[i].Name == device.Name {
+				sp.Devices[i].IsActive = device.IsActive
+			}
+		}
+	}
+
+	return nil
+}
+
 func (sp *Spotify) getActiveDevice() *Device {
-	devices, err := getDevicesData(sp.tokens.AccessToken)
+	err := sp.updateDevicesData()
 
 	if err != nil {
 		return nil
 	}
 
-	sp.Devices = devices
-
-	for _, device := range devices {
+	for _, device := range sp.Devices {
 		if device.IsActive {
 			return &device
 		}
@@ -197,16 +233,16 @@ func (sp *Spotify) getDeviceId(deviceName string) (string, error) {
 
 	log.Printf("Retrieving id for device %s\n", deviceName)
 
-	devices, err := getDevicesData(sp.tokens.AccessToken)
+	err := sp.updateDevicesData()
 
 	if err != nil {
 		return "", err
 	}
 
 	deviceId := ""
-	log.Printf("Devices found: %v", devices)
+	log.Printf("Devices found: %v", sp.Devices)
 
-	for _, device := range devices {
+	for _, device := range sp.Devices {
 		if device.Name == deviceName {
 			deviceId = device.ID
 		}
@@ -397,11 +433,9 @@ func getEnvFromDeviceName(deviceName string) *Spotify {
 	// Loop through environments checking device lists
 	for _, env := range envs {
 		if len(env.Devices) == 0 {
-			devices, err := getDevicesData(env.tokens.AccessToken)
+			err := env.updateDevicesData()
 			if err != nil {
 				log.Printf("Error retrieving devices data: %s\n", err)
-			} else {
-				env.Devices = devices
 			}
 		}
 		for _, device := range env.Devices {
