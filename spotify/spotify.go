@@ -396,6 +396,14 @@ func getEnvFromDeviceName(deviceName string) *Spotify {
 
 	// Loop through environments checking device lists
 	for _, env := range envs {
+		if len(env.Devices) == 0 {
+			devices, err := getDevicesData(env.tokens.AccessToken)
+			if err != nil {
+				log.Printf("Error retrieving devices data: %s\n", err)
+			} else {
+				env.Devices = devices
+			}
+		}
 		for _, device := range env.Devices {
 			if device.Name == deviceName {
 				log.Println("Device name found, returning instance")
