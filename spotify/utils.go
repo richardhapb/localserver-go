@@ -1,6 +1,7 @@
 package spotify
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -79,9 +80,9 @@ func readTokensFromFile(fileName string) (*Tokens, error) {
 }
 
 func schedule(epochMillis int64, action func()) {
-    delayMillis := epochMillis - time.Now().UnixMilli()
+	delayMillis := epochMillis - time.Now().UnixMilli()
 
-	log.Println(fmt.Sprintf("Scheduling task to %d seconds later\n", delayMillis / 1000))
+	log.Println(fmt.Sprintf("Scheduling task to %d seconds later\n", delayMillis/1000))
 
 	if delayMillis < 0 {
 		log.Println("epochMillis is in the past in schedule function")
@@ -120,4 +121,38 @@ func parsePlaylistId(playlistUri string) (string, error) {
 	}
 
 	return parts[2], nil
+}
+
+func getDevicesData(access_token string) ([]Device, error) {
+	if access_token == "" {
+		return []Device{}, fmt.Errorf("access_token is required")
+	}
+
+	urlStr := "https://api.spotify.com/v1/me/player/devices"
+
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return []Device{}, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", access_token))
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return []Device{}, fmt.Errorf("Failed to execute request: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	var devicesResponse struct {
+		Devices []Device `json:"devices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+		return []Device{}, fmt.Errorf("Failed in request when retrieving device: %w", err)
+	}
+
+	return devicesResponse.Devices, nil
 }

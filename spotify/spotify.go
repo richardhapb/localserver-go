@@ -161,7 +161,15 @@ func (sp *Spotify) String() string {
 }
 
 func (sp *Spotify) getActiveDevice() *Device {
-	for _, device := range sp.Devices {
+	devices, err := getDevicesData(sp.tokens.AccessToken)
+
+	if err != nil {
+		return nil
+	}
+
+	sp.Devices = devices
+
+	for _, device := range devices {
 		if device.IsActive {
 			return &device
 		}
@@ -171,72 +179,34 @@ func (sp *Spotify) getActiveDevice() *Device {
 	return &sp.Devices[0]
 }
 
-func (sp *Spotify) getActiveDeviceName() string {
-	if device := sp.getActiveDevice(); device != nil {
-		return device.Name
-	}
-
-	return ""
-}
-
 func (sp *Spotify) getActiveDeviceId() string {
 	if device := sp.getActiveDevice(); device != nil {
 		if device.ID != "" {
 			return device.ID
 		}
-
-		deviceId, err := sp.getDeviceId(sp.getActiveDeviceName())
-		if err == nil {
-			device.ID = deviceId
-			return deviceId
-		}
-		log.Printf("Error getting device ID: %v", err)
 	}
 
 	return ""
 }
 
 func (sp *Spotify) getDeviceId(deviceName string) (string, error) {
-	urlStr := "https://api.spotify.com/v1/me/player/devices"
 
 	if deviceName == "" {
 		return "", fmt.Errorf("device name is empty")
 	}
 
-	log.Println(fmt.Sprintf("Retrieving id for device %s", deviceName))
+	log.Printf("Retrieving id for device %s\n", deviceName)
 
-	req, err := http.NewRequest("GET", urlStr, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", sp.tokens.AccessToken))
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	devices, err := getDevicesData(sp.tokens.AccessToken)
 
 	if err != nil {
-		return "", fmt.Errorf("Failed to execute request: %w", err)
-	}
-
-	defer resp.Body.Close()
-
-	var devicesResponse struct {
-		Devices []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			IsActive bool   `json:"is_active"`
-		} `json:"devices"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
-		return "", fmt.Errorf("Failed in request when retrieving device: %w", err)
+		return "", err
 	}
 
 	deviceId := ""
-	log.Printf("Devices found: %v", devicesResponse.Devices)
+	log.Printf("Devices found: %v", devices)
 
-	for _, device := range devicesResponse.Devices {
+	for _, device := range devices {
 		if device.Name == deviceName {
 			deviceId = device.ID
 		}
