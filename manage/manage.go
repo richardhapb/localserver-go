@@ -57,6 +57,8 @@ var lamp struct {
 	on   bool
 }
 
+var jnCommand = "jn -t %s -c %s -d %s > /tmp/jn.log 2>&1 &"
+
 func InitializeLamp() error {
 	var err error
 	lamp.line, err = gpiocdev.RequestLine("gpiochip0", 17, gpiocdev.AsOutput(0))
@@ -70,7 +72,6 @@ func InitializeLamp() error {
 
 func newDevicesAttributes() *[]deviceAttributes {
 	var da []deviceAttributes
-	jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s > /tmp/jn.log 2>&1 &"}
 
 	da = append(da, deviceAttributes{
 		name:   "macbook",
@@ -82,7 +83,6 @@ func newDevicesAttributes() *[]deviceAttributes {
 			"pmset sleepnow",
 		},
 		battCommands: []string{"pmset -g batt | grep -o '[0-9]\\+%' | sed 's/%//' "},
-		jnCommands:   jnCommand,
 	})
 
 	da = append(da, deviceAttributes{
@@ -97,7 +97,6 @@ func newDevicesAttributes() *[]deviceAttributes {
 			"DISPLAY=:0 i3lock -n -c 000000 >/dev/null 2>&1 &",
 		},
 		battCommands: []string{"cat /sys/class/power_supply/BAT1/capacity"},
-		jnCommands:   jnCommand,
 	})
 
 	return &da
@@ -109,7 +108,17 @@ func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
 		unlimitedArg = " -u"
 	}
 
-	return []string{fmt.Sprintf(dd.attritutes.jnCommands[0]+unlimitedArg, args.Time, args.Category, args.Description, args.Notification)}
+	var descArg string
+	if args.Description != "" {
+		descArg = " -l " + args.Description
+	}
+
+	var notifArg string
+	if args.Description != "" {
+		notifArg = " -n " + args.Notification
+	}
+
+	return []string{fmt.Sprintf(jnCommand+unlimitedArg, args.Time, args.Category, args.Notification+notifArg+descArg+unlimitedArg)}
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
