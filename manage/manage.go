@@ -110,15 +110,15 @@ func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
 
 	var descArg string
 	if args.Description != "" {
-		descArg = " -l " + args.Description
+		descArg = " -l \"" + args.Description + "\""
 	}
 
 	var notifArg string
-	if args.Description != "" {
+	if args.Notification != "" {
 		notifArg = " -n " + args.Notification
 	}
 
-	return []string{fmt.Sprintf(jnCommand+unlimitedArg, args.Time, args.Category, args.Notification+notifArg+descArg+unlimitedArg)}
+	return []string{fmt.Sprintf(jnCommand+unlimitedArg, args.Time, args.Category, notifArg+descArg+unlimitedArg)}
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
