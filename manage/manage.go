@@ -32,7 +32,8 @@ type deviceAttributes struct {
 	macEnv        string
 	wakeCommands  []string
 	sleepCommands []string
-	battCommand   string
+	battCommands  []string
+	jnCommands    []string
 }
 
 type deviceData struct {
@@ -41,6 +42,13 @@ type deviceData struct {
 	ip         string
 	mac        string
 	attritutes *deviceAttributes
+}
+
+type jnAttributes struct {
+	Category     string `json:"category"`
+	Time         string `json:"time"`
+	Description  string `json:"description"`
+	Notification string `json:"notification"`
 }
 
 var lamp struct {
@@ -61,6 +69,8 @@ func InitializeLamp() error {
 
 func newDevicesAttributes() *[]deviceAttributes {
 	var da []deviceAttributes
+	jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s >/dev/null 2>&1 &"}
+
 	da = append(da, deviceAttributes{
 		name:   "macbook",
 		macEnv: "MAC_MAC",
@@ -70,7 +80,8 @@ func newDevicesAttributes() *[]deviceAttributes {
 		sleepCommands: []string{
 			"pmset sleepnow",
 		},
-		battCommand: "pmset -g batt | grep -o '[0-9]\\+%' | sed 's/%//' ",
+		battCommands: []string{"pmset -g batt | grep -o '[0-9]\\+%' | sed 's/%//' "},
+		jnCommands:   jnCommand,
 	})
 
 	da = append(da, deviceAttributes{
@@ -84,10 +95,15 @@ func newDevicesAttributes() *[]deviceAttributes {
 			"DISPLAY=:0 xset dpms 0 0 5",
 			"DISPLAY=:0 i3lock -n -c 000000 >/dev/null 2>&1 &",
 		},
-		battCommand: "cat /sys/class/power_supply/BAT1/capacity",
+		battCommands: []string{"cat /sys/class/power_supply/BAT1/capacity"},
+		jnCommands:   jnCommand,
 	})
 
 	return &da
+}
+
+func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
+	return []string{fmt.Sprintf(dd.attritutes.jnCommands[0], args.Time, args.Category, args.Description, args.Notification)}
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
@@ -107,7 +123,7 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 	device.name = c.Query("name")
 
 	if device.name == "" {
-		return nil, fmt.Errorf("name is requested")
+		return nil, fmt.Errorf("name is required")
 	}
 
 	device.attritutes = getDeviceAtt(device.name)
@@ -171,23 +187,16 @@ func Wake(c *gin.Context) {
 	device, err := validateRequest(c)
 
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 		return
 	}
 
-	if err := sendWOL(device.mac); err != nil {
-		log.Fatalln(err)
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
+	_, err = executeCommands(device, device.attritutes.wakeCommands)
+	if err == nil {
+		log.Printf("Command failed: %s\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
-	}
-
-	for _, cmd := range device.attritutes.wakeCommands {
-		if _, err := sendCommand(cmd, device.username, device.ip); err != nil {
-			log.Printf("Command failed: %s", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
-			return
-		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Command executed successfully"})
@@ -198,23 +207,22 @@ func Sleep(c *gin.Context) {
 	device, err := validateRequest(c)
 
 	if err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
 		return
 	}
 
 	if err := sendWOL(device.mac); err != nil {
-		log.Fatalln(err)
+		log.Println(err)
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
 		return
 	}
 
-	for _, cmd := range device.attritutes.sleepCommands {
-		if _, err := sendCommand(cmd, device.username, device.ip); err != nil {
-			log.Printf("Command failed: %s", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
-			return
-		}
+	_, err = executeCommands(device, device.attritutes.sleepCommands)
+	if err == nil {
+		log.Printf("Command failed: %s\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Command executed successfully"})
@@ -229,19 +237,15 @@ func Battery(c *gin.Context) {
 		return
 	}
 
-	if err := sendWOL(device.mac); err != nil {
-		log.Fatalln(err)
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
+	batt, err := executeCommands(device, device.attritutes.battCommands)
+	if err == nil {
+		log.Printf("Command failed: %s\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
 	}
 
-	if batt, err := sendCommand(device.attritutes.battCommand, device.username, device.ip); err == nil {
-		log.Printf("Battery of %s: %s", device.name, batt)
-		c.JSON(http.StatusOK, gin.H{"battery": batt})
-	} else {
-		log.Printf("Command failed: %s\n", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
-	}
+	log.Printf("Battery of %s: %s", device.name, batt)
+	c.JSON(http.StatusOK, gin.H{"battery": batt})
 }
 
 func ToggleLamp(c *gin.Context) {
@@ -249,6 +253,7 @@ func ToggleLamp(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"error": "Raspberry Pi pin 17 is not bound,",
 		})
+		return
 	}
 
 	if lamp.on {
@@ -265,6 +270,50 @@ func ToggleLamp(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status": "Lamp on",
 	})
+}
+
+func LaunchJn(c *gin.Context) {
+	device, err := validateRequest(c)
+
+	if err != nil {
+		log.Println(err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err})
+		return
+	}
+
+	var jnRequest jnAttributes
+
+	if err := json.NewDecoder(c.Request.Body).Decode(&jnRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid attributes: %s", err)})
+	}
+
+	_, err = executeCommands(device, device.buildJnCommand(jnRequest))
+	if err != nil {
+		log.Printf("Command failed: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Just-Notify executed successfully"})
+}
+
+func executeCommands(device *deviceData, commands []string) (string, error) {
+	if err := sendWOL(device.mac); err != nil {
+		log.Println(err)
+		return "", fmt.Errorf("WOL failed: %s", err)
+	}
+
+	var lastResponse string
+	for _, cmd := range commands {
+		response, err := sendCommand(cmd, device.username, device.ip)
+		if err != nil {
+			log.Printf("Command failed: %s", err)
+			return response, fmt.Errorf("Command failed: %s", err)
+		}
+		lastResponse = response
+	}
+
+	return lastResponse, nil
 }
 
 func captureDeviceIP(name string, devices *devicesResponse) string {
