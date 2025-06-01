@@ -33,7 +33,6 @@ type deviceAttributes struct {
 	wakeCommands  []string
 	sleepCommands []string
 	battCommands  []string
-	jnCommands    []string
 }
 
 type deviceData struct {
@@ -56,8 +55,6 @@ var lamp struct {
 	line *gpiocdev.Line
 	on   bool
 }
-
-var jnCommand = "jn -t %s -c %s -d %s > /tmp/jn.log 2>&1 &"
 
 func InitializeLamp() error {
 	var err error
@@ -103,22 +100,22 @@ func newDevicesAttributes() *[]deviceAttributes {
 }
 
 func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
-	var unlimitedArg string
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("jn -t %s -c %s", args.Time, args.Category))
+
 	if args.UnlimitedTime {
-		unlimitedArg = " -u"
+		sb.WriteString(" -u")
 	}
-
-	var descArg string
 	if args.Description != "" {
-		descArg = " -l \"" + args.Description + "\""
+		fmt.Fprintf(&sb, " -l %q", args.Description)
 	}
-
-	var notifArg string
 	if args.Notification != "" {
-		notifArg = " -n " + args.Notification
+		fmt.Fprintf(&sb, " -n %q", args.Notification)
 	}
 
-	return []string{fmt.Sprintf(jnCommand+unlimitedArg, args.Time, args.Category, notifArg+descArg+unlimitedArg)}
+	sb.WriteString(" > /tmp/jn.log 2>&1 &")
+	
+	return []string{sb.String()}
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
