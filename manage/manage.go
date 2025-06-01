@@ -69,7 +69,7 @@ func InitializeLamp() error {
 
 func newDevicesAttributes() *[]deviceAttributes {
 	var da []deviceAttributes
-	jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s >/dev/null 2>&1 &"}
+    jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s > /tmp/jn.log 2>&1 &"}
 
 	da = append(da, deviceAttributes{
 		name:   "macbook",
@@ -295,6 +295,25 @@ func LaunchJn(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Just-Notify executed successfully"})
+}
+
+func TermSignalJn(c *gin.Context) {
+	device, err := validateRequest(c)
+
+	if err != nil {
+		log.Println(err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err})
+		return
+	}
+
+result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.1 && tail -1 /tmp/jn.log"})
+	if err != nil {
+		log.Printf("Command failed: %s", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("SIGNTERM signal sent to Just-Notify: %s", result)})
 }
 
 func executeCommands(device *deviceData, commands []string) (string, error) {
