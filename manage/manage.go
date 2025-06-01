@@ -45,10 +45,11 @@ type deviceData struct {
 }
 
 type jnAttributes struct {
-	Category     string `json:"category"`
-	Time         string `json:"time"`
-	Description  string `json:"description"`
-	Notification string `json:"notification"`
+	Category      string `json:"category"`
+	Time          string `json:"time"`
+	Description   string `json:"description"`
+	Notification  string `json:"notification"`
+	UnlimitedTime bool   `json:"unlimited"`
 }
 
 var lamp struct {
@@ -69,7 +70,7 @@ func InitializeLamp() error {
 
 func newDevicesAttributes() *[]deviceAttributes {
 	var da []deviceAttributes
-    jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s > /tmp/jn.log 2>&1 &"}
+	jnCommand := []string{"jn -t %s -c %s -d -l %s -n %s > /tmp/jn.log 2>&1 &"}
 
 	da = append(da, deviceAttributes{
 		name:   "macbook",
@@ -103,7 +104,12 @@ func newDevicesAttributes() *[]deviceAttributes {
 }
 
 func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
-	return []string{fmt.Sprintf(dd.attritutes.jnCommands[0], args.Time, args.Category, args.Description, args.Notification)}
+	var unlimitedArg string
+	if args.UnlimitedTime {
+		unlimitedArg = " -u"
+	}
+
+	return []string{fmt.Sprintf(dd.attritutes.jnCommands[0]+unlimitedArg, args.Time, args.Category, args.Description, args.Notification)}
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
@@ -193,7 +199,7 @@ func Wake(c *gin.Context) {
 	}
 
 	_, err = executeCommands(device, device.attritutes.wakeCommands)
-	if err == nil {
+	if err != nil {
 		log.Printf("Command failed: %s\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
@@ -219,7 +225,7 @@ func Sleep(c *gin.Context) {
 	}
 
 	_, err = executeCommands(device, device.attritutes.sleepCommands)
-	if err == nil {
+	if err != nil {
 		log.Printf("Command failed: %s\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
@@ -238,7 +244,7 @@ func Battery(c *gin.Context) {
 	}
 
 	batt, err := executeCommands(device, device.attritutes.battCommands)
-	if err == nil {
+	if err != nil {
 		log.Printf("Command failed: %s\n", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
@@ -306,7 +312,7 @@ func TermSignalJn(c *gin.Context) {
 		return
 	}
 
-result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.1 && tail -1 /tmp/jn.log"})
+	result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.1 && tail -1 /tmp/jn.log"})
 	if err != nil {
 		log.Printf("Command failed: %s", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
@@ -327,7 +333,7 @@ func executeCommands(device *deviceData, commands []string) (string, error) {
 		response, err := sendCommand(cmd, device.username, device.ip)
 		if err != nil {
 			log.Printf("Command failed: %s", err)
-			return response, fmt.Errorf("Command failed: %s", err)
+			return "", fmt.Errorf("Command failed: %s", err)
 		}
 		lastResponse = response
 	}
