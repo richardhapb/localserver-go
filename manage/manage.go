@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/warthog618/go-gpiocdev"
 )
 
 type devicesResponse struct {
@@ -49,22 +48,6 @@ type jnAttributes struct {
 	Description   string `json:"description"`
 	Notification  string `json:"notification"`
 	UnlimitedTime bool   `json:"unlimited"`
-}
-
-var lamp struct {
-	line *gpiocdev.Line
-	on   bool
-}
-
-func InitializeLamp() error {
-	var err error
-	lamp.line, err = gpiocdev.RequestLine("gpiochip0", 17, gpiocdev.AsOutput(0))
-
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func newDevicesAttributes() *[]deviceAttributes {
@@ -258,30 +241,6 @@ func Battery(c *gin.Context) {
 
 	log.Printf("Battery of %s: %s", device.name, batt)
 	c.JSON(http.StatusOK, gin.H{"battery": batt})
-}
-
-func ToggleLamp(c *gin.Context) {
-	if lamp.line == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"error": "Raspberry Pi pin 17 is not bound,",
-		})
-		return
-	}
-
-	if lamp.on {
-		lamp.line.SetValue(0)
-		lamp.on = false
-		c.JSON(http.StatusOK, gin.H{
-			"status": "Lamp off",
-		})
-		return
-	}
-
-	lamp.line.SetValue(1)
-	lamp.on = true
-	c.JSON(http.StatusOK, gin.H{
-		"status": "Lamp on",
-	})
 }
 
 func LaunchJn(c *gin.Context) {
