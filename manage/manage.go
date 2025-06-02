@@ -84,7 +84,7 @@ func newDevicesAttributes() *[]deviceAttributes {
 
 func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("jn -t %s -c %s", args.Time, args.Category))
+	sb.WriteString(fmt.Sprintf("jn -d -t %s -c %s", args.Time, args.Category))
 
 	if args.UnlimitedTime {
 		sb.WriteString(" -u")
@@ -277,7 +277,7 @@ func TermSignalJn(c *gin.Context) {
 		return
 	}
 
-	result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.1 && tail -1 /tmp/jn.log"})
+	result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.5 && tail -1 /tmp/jn.log"})
 	if err != nil {
 		log.Printf("Command failed: %s", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
