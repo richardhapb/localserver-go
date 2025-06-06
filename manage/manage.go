@@ -302,14 +302,23 @@ func TermSignalJn(c *gin.Context) {
 
 	// Give process time to write final log and read it
 	time.Sleep(500 * time.Millisecond)
-	output, err := exec.Command("tail", "-1", "/tmp/jn.log").CombinedOutput()
+	output, err := os.ReadFile("/tmp/jn.log")
 	if err != nil {
 		log.Printf("Failed to read jn log: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read termination status"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", string(output))})
+	lines := strings.Split(string(output), "\n")
+	lastLine := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "elapsed") {
+			lastLine = lines[i]
+			break
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", lastLine)})
 }
 
 func executeCommands(device *deviceData, commands []string) (string, error) {
