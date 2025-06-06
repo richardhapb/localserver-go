@@ -48,6 +48,7 @@ type jnAttributes struct {
 	Description   string `json:"description"`
 	Notification  string `json:"notification"`
 	UnlimitedTime bool   `json:"unlimited"`
+	Headless      bool   `json:"headless"`
 }
 
 func newDevicesAttributes() *[]deviceAttributes {
@@ -82,9 +83,9 @@ func newDevicesAttributes() *[]deviceAttributes {
 	return &da
 }
 
-func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
+func buildJnCommand(args jnAttributes) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("jn -d -t %s -c %s", args.Time, args.Category))
+	sb.WriteString(fmt.Sprintf("jn -d -H -t %s -c %s", args.Time, args.Category))
 
 	if args.UnlimitedTime {
 		sb.WriteString(" -u")
@@ -97,8 +98,8 @@ func (dd *deviceData) buildJnCommand(args jnAttributes) []string {
 	}
 
 	sb.WriteString(" > /tmp/jn.log 2>&1 &")
-	
-	return []string{sb.String()}
+
+	return sb.String()
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
@@ -244,22 +245,14 @@ func Battery(c *gin.Context) {
 }
 
 func LaunchJn(c *gin.Context) {
-	device, err := validateRequest(c)
-
-	if err != nil {
-		log.Println(err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err})
-		return
-	}
-
 	var jnRequest jnAttributes
 
 	if err := json.NewDecoder(c.Request.Body).Decode(&jnRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid attributes: %s", err)})
 	}
 
-	_, err = executeCommands(device, device.buildJnCommand(jnRequest))
-	if err != nil {
+	cmd := exec.Command("jn", strings.Fields(buildJnCommand(jnRequest)[3:])...)
+	if err := cmd.Run(); err != nil {
 		log.Printf("Command failed: %s", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
 		return
