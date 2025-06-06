@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -85,7 +86,7 @@ func newDevicesAttributes() *[]deviceAttributes {
 
 func buildJnCommand(args jnAttributes) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("jn -d -H -t %s -c %s", args.Time, args.Category))
+	sb.WriteString(fmt.Sprintf("jn -d -H -t %s -c %s &", args.Time, args.Category))
 
 	if args.UnlimitedTime {
 		sb.WriteString(" -u")
@@ -245,13 +246,24 @@ func Battery(c *gin.Context) {
 }
 
 func LaunchJn(c *gin.Context) {
+	// Find jn executable path once at startup
+	jnPath, err := exec.LookPath("jn")
+	if err != nil {
+		// Fallback to common installation path if not in PATH
+		jnPath = filepath.Join(os.Getenv("HOME"), ".local", "bin", "jn")
+		log.Printf("jn Path not found, fallback to default %s \n", jnPath)
+		if _, err := os.Stat(jnPath); err != nil {
+			log.Fatal("jn executable not found. Please ensure Just-Notify is installed and in PATH")
+		}
+	}
+
 	var jnRequest jnAttributes
 
 	if err := json.NewDecoder(c.Request.Body).Decode(&jnRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid attributes: %s", err)})
 	}
 
-	cmd := exec.Command("jn", strings.Fields(buildJnCommand(jnRequest)[3:])...)
+	cmd := exec.Command(jnPath, strings.Fields(buildJnCommand(jnRequest)[3:])...)
 	if err := cmd.Run(); err != nil {
 		log.Printf("Command failed: %s", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
