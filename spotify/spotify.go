@@ -190,6 +190,7 @@ func (sp *Spotify) updateDevicesData() error {
 	for _, device := range devicesResponse.Devices {
 		for i := range sp.Devices {
 			if sp.Devices[i].Name == device.Name {
+				sp.Devices[i].ID = device.ID
 				sp.Devices[i].IsActive = device.IsActive
 			}
 		}
