@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -84,23 +85,24 @@ func newDevicesAttributes() *[]deviceAttributes {
 	return &da
 }
 
-func buildJnCommand(args jnAttributes) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("jn -d -H -t %s -c %s &", args.Time, args.Category))
+func buildJnCommand(args jnAttributes) []string {
+	cmd := []string{"-d"}
+	if args.Headless {
+		cmd = append(cmd, "-H")
+	}
+	cmd = append(cmd, "-t", args.Time, "-c", args.Category)
 
 	if args.UnlimitedTime {
-		sb.WriteString(" -u")
+		cmd = append(cmd, "-u")
 	}
 	if args.Description != "" {
-		fmt.Fprintf(&sb, " -l %q", args.Description)
+		cmd = append(cmd, "-l", args.Description)
 	}
 	if args.Notification != "" {
-		fmt.Fprintf(&sb, " -n %q", args.Notification)
+		cmd = append(cmd, "-n", args.Notification)
 	}
 
-	sb.WriteString(" > /tmp/jn.log 2>&1 &")
-
-	return sb.String()
+	return cmd
 }
 
 func getDeviceAtt(name string) *deviceAttributes {
@@ -258,38 +260,56 @@ func LaunchJn(c *gin.Context) {
 	}
 
 	var jnRequest jnAttributes
-
-	if err := json.NewDecoder(c.Request.Body).Decode(&jnRequest); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid attributes: %s", err)})
-	}
-
-	cmd := exec.Command(jnPath, strings.Fields(buildJnCommand(jnRequest)[3:])...)
-	if err := cmd.Run(); err != nil {
-		log.Printf("Command failed: %s", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+	if err := c.ShouldBindJSON(&jnRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request: %v", err)})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Just-Notify executed successfully"})
+	cmd := exec.Command(jnPath, buildJnCommand(jnRequest)...)
+	logFile, err := os.Create("/tmp/jn.log")
+	if err != nil {
+		log.Printf("Failed to create log file: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create log file"})
+		return
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	// Start the process without waiting
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start jn: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start Just-Notify"})
+		return
+	}
+
+	// Detach the process
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("jn process ended with error: %v", err)
+		}
+	}()
+
+	c.JSON(http.StatusOK, gin.H{"message": "Just-Notify started successfully"})
 }
 
 func TermSignalJn(c *gin.Context) {
-	device, err := validateRequest(c)
-
-	if err != nil {
-		log.Println(err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err})
+	// Kill jn process
+	if err := exec.Command("pkill", "-SIGTERM", "jn").Run(); err != nil {
+		log.Printf("Failed to terminate jn: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate jn process"})
 		return
 	}
 
-	result, err := executeCommands(device, []string{"pkill -SIGTERM jn && sleep 0.5 && tail -1 /tmp/jn.log"})
+	// Give process time to write final log and read it
+	time.Sleep(500 * time.Millisecond)
+	output, err := exec.Command("tail", "-1", "/tmp/jn.log").CombinedOutput()
 	if err != nil {
-		log.Printf("Command failed: %s", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Command failed: %s", err)})
+		log.Printf("Failed to read jn log: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read termination status"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("SIGNTERM signal sent to Just-Notify: %s", result)})
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", string(output))})
 }
 
 func executeCommands(device *deviceData, commands []string) (string, error) {
