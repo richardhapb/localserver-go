@@ -248,20 +248,17 @@ func Battery(c *gin.Context) {
 }
 
 func LaunchJn(c *gin.Context) {
-	// Find jn executable path once at startup
-	jnPath, err := exec.LookPath("jn")
-	if err != nil {
-		// Fallback to common installation path if not in PATH
-		jnPath = filepath.Join(os.Getenv("HOME"), ".local", "bin", "jn")
-		log.Printf("jn Path not found, fallback to default %s \n", jnPath)
-		if _, err := os.Stat(jnPath); err != nil {
-			log.Fatal("jn executable not found. Please ensure Just-Notify is installed and in PATH")
-		}
-	}
-
 	var jnRequest jnAttributes
 	if err := c.ShouldBindJSON(&jnRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request: %v", err)})
+		return
+	}
+
+	jnPath, err := getJNPath()
+
+	if err != nil {
+		log.Printf("Failed to locate jn: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to locate jn: %v", err)})
 		return
 	}
 
@@ -293,10 +290,25 @@ func LaunchJn(c *gin.Context) {
 }
 
 func TermSignalJn(c *gin.Context) {
+	category := c.Query("category")
+
+	if category == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "category is required"})
+		return
+	}
+
+	jnPath, err := getJNPath()
+
+	if err != nil {
+		log.Printf("Failed to locate jn: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to locate jn: %v", err)})
+		return
+	}
+
 	// Kill jn process
-	if err := exec.Command("pkill", "-SIGTERM", "jn").Run(); err != nil {
+	if err := exec.Command(jnPath, "-k", "-c", category).Run(); err != nil {
 		log.Printf("Failed to terminate jn: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to terminate jn process"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to terminate jn process: %s", err)})
 		return
 	}
 
@@ -305,7 +317,7 @@ func TermSignalJn(c *gin.Context) {
 	output, err := os.ReadFile("/tmp/jn.log")
 	if err != nil {
 		log.Printf("Failed to read jn log: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read termination status"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to read termination status: %s", err)})
 		return
 	}
 
@@ -382,4 +394,19 @@ func sendWOL(mac string) error {
 
 	log.Printf("Wake-on-LAN packet sent to %s: %s", mac, string(output))
 	return nil
+}
+
+func getJNPath() (string, error) {
+	// Find jn executable path once at startup
+	jnPath, err := exec.LookPath("jn")
+	if err != nil {
+		// Fallback to common installation path if not in PATH
+		jnPath = filepath.Join(os.Getenv("HOME"), ".local", "bin", "jn")
+		log.Printf("jn Path not found, fallback to default %s \n", jnPath)
+		if _, err := os.Stat(jnPath); err != nil {
+			log.Fatal("jn executable not found. Please ensure Just-Notify is installed and in PATH")
+		}
+	}
+
+	return jnPath, err
 }
