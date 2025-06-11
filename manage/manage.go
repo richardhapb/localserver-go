@@ -254,13 +254,7 @@ func LaunchJn(c *gin.Context) {
 		return
 	}
 
-	jnPath, err := getJNPath()
-
-	if err != nil {
-		log.Printf("Failed to locate jn: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to locate jn: %v", err)})
-		return
-	}
+	jnPath := getJNPath()
 
 	cmd := exec.Command(jnPath, buildJnCommand(jnRequest)...)
 	logFile, err := os.Create("/tmp/jn.log")
@@ -297,13 +291,7 @@ func TermSignalJn(c *gin.Context) {
 		return
 	}
 
-	jnPath, err := getJNPath()
-
-	if err != nil {
-		log.Printf("Failed to locate jn: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to locate jn: %v", err)})
-		return
-	}
+	jnPath := getJNPath()
 
 	// Kill jn process
 	if err := exec.Command(jnPath, "-k", "-c", category).Run(); err != nil {
@@ -396,7 +384,7 @@ func sendWOL(mac string) error {
 	return nil
 }
 
-func getJNPath() (string, error) {
+func getJNPath() string {
 	// Find jn executable path once at startup
 	jnPath, err := exec.LookPath("jn")
 	if err != nil {
@@ -408,5 +396,5 @@ func getJNPath() (string, error) {
 		}
 	}
 
-	return jnPath, err
+	return jnPath
 }
