@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/kelseyhightower/envconfig"
 )
 
 type devicesResponse struct {
@@ -51,6 +53,23 @@ type jnAttributes struct {
 	Notification  string `json:"notification"`
 	UnlimitedTime bool   `json:"unlimited"`
 	Headless      bool   `json:"headless"`
+}
+
+type Config struct {
+	OpenAIKey string `envconfig:"OPENAI_API_KEY" required:"true"`
+	TSApiKey  string `envconfig:"TS_API_KEY" required:"true"`
+}
+
+// Global config instance
+var cfg Config
+
+func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Warning: .env file not found: %v", err)
+	}
+	if err := envconfig.Process("", &cfg); err != nil {
+		log.Fatalf("Failed to process environment config: %v", err)
+	}
 }
 
 func newDevicesAttributes() *[]deviceAttributes {
@@ -131,15 +150,10 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 		return nil, fmt.Errorf("device not found")
 	}
 
-	if err := godotenv.Load(); err != nil {
-		return nil, fmt.Errorf(".env file not found")
-	}
-
 	urlStr := "https://api.tailscale.com/api/v2/tailnet/richardhapb.github/devices"
-	apiKey := os.Getenv("TS_API_KEY")
 	mac := os.Getenv(device.attritutes.macEnv)
 
-	if apiKey == "" || mac == "" {
+	if cfg.TSApiKey == "" || mac == "" {
 		return nil, fmt.Errorf("Api key or MAC not found")
 	}
 
@@ -150,7 +164,7 @@ func validateRequest(c *gin.Context) (*deviceData, error) {
 		return nil, fmt.Errorf("Error creating request: %s\n", err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.TSApiKey))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -323,33 +337,52 @@ func TermSignalJn(c *gin.Context) {
 
 func ReviewGrammar(c *gin.Context) {
 	var content struct {
-		Text string `json:"text"`
+		Text string `json:"text" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&content); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request: %v", err)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: missing or invalid text field"})
 		return
 	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Error retrieving user home dir: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to determine user home directory"})
 		return
 	}
 
-	// TODO: Make this dynamic
 	neospellerPath := filepath.Join(home, ".local", "bin", "neospeller")
+	if _, err := os.Stat(neospellerPath); os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Neospeller binary not found"})
+		return
+	}
 
 	cmd := exec.Command(neospellerPath, "--lang", "text")
-	out, err := cmd.CombinedOutput()
-
+	cmd.Env = append(os.Environ(), fmt.Sprintf("OPENAI_API_KEY=%s", cfg.OpenAIKey))
+	
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Error executing neospeller: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create input pipe"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": out})
+	go func() {
+		defer stdin.Close()
+		io.WriteString(stdin, content.Text)
+	}()
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Neospeller execution failed: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"corrections": string(out)})
 }
+
+
 
 func executeCommands(device *deviceData, commands []string) (string, error) {
 	if err := sendWOL(device.mac); err != nil {
