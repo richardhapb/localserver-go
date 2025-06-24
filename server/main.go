@@ -2,8 +2,8 @@ package server
 
 import (
 	"github.com/gin-gonic/gin"
-	"localserver/spotify"
 	"localserver/manage"
+	"localserver/spotify"
 	"log"
 )
 
@@ -40,6 +40,7 @@ func CreateServer() {
 		manageGroup.GET("/lamp", manage.ToggleLamp)
 		manageGroup.GET("/jn-close", manage.TermSignalJn)
 		manageGroup.POST("/jn-init", manage.LaunchJn)
+		manageGroup.POST("/grammar", manage.ReviewGrammar)
 	}
 
 	router.Run(":9000")

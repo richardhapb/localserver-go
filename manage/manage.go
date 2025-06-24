@@ -321,6 +321,36 @@ func TermSignalJn(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", lastLine)})
 }
 
+func ReviewGrammar(c *gin.Context) {
+	var content struct {
+		Text string `json:"text"`
+	}
+
+	if err := c.ShouldBindJSON(&content); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request: %v", err)})
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Error retrieving user home dir: %v", err)})
+		return
+	}
+
+	// TODO: Make this dynamic
+	neospellerPath := filepath.Join(home, ".local", "bin", "neospeller")
+
+	cmd := exec.Command(neospellerPath, "--lang", "text")
+	out, err := cmd.CombinedOutput()
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Error executing neospeller: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": out})
+}
+
 func executeCommands(device *deviceData, commands []string) (string, error) {
 	if err := sendWOL(device.mac); err != nil {
 		log.Println(err)
