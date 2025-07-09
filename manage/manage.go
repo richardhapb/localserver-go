@@ -3,9 +3,9 @@ package manage
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,7 +327,10 @@ func TermSignalJn(c *gin.Context) {
 	timeElapsed := ""
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(lines[i], "elapsed") {
-			timeElapsed = lines[i]
+			idx := strings.Index(lines[i], "Time elapsed")
+			if idx != -1 {
+				timeElapsed = lines[i][idx:]
+			}
 			break
 		}
 	}
@@ -359,7 +362,7 @@ func ReviewGrammar(c *gin.Context) {
 
 	cmd := exec.Command(neospellerPath, "--lang", "text")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("OPENAI_API_KEY=%s", cfg.OpenAIKey))
-
+	
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create input pipe"})
@@ -381,6 +384,8 @@ func ReviewGrammar(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"corrections": string(out)})
 }
+
+
 
 func executeCommands(device *deviceData, commands []string) (string, error) {
 	if err := sendWOL(device.mac); err != nil {
