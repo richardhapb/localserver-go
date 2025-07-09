@@ -324,15 +324,18 @@ func TermSignalJn(c *gin.Context) {
 	}
 
 	lines := strings.Split(string(output), "\n")
-	lastLine := ""
+	timeElapsed := ""
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(lines[i], "elapsed") {
-			lastLine = lines[i]
+			idx := strings.Index(lines[i], "Time elapsed")
+			if idx != -1 {
+				timeElapsed = lines[i][idx:]
+			}
 			break
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", lastLine)})
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("Just-Notify terminated: %s", timeElapsed)})
 }
 
 func ReviewGrammar(c *gin.Context) {
@@ -448,15 +451,10 @@ func sendWOL(mac string) error {
 }
 
 func getJNPath() string {
-	// Find jn executable path once at startup
-	jnPath, err := exec.LookPath("jn")
-	if err != nil {
-		// Fallback to common installation path if not in PATH
-		jnPath = filepath.Join(os.Getenv("HOME"), ".local", "bin", "jn")
-		log.Printf("jn Path not found, fallback to default %s \n", jnPath)
-		if _, err := os.Stat(jnPath); err != nil {
-			log.Fatal("jn executable not found. Please ensure Just-Notify is installed and in PATH")
-		}
+	// TODO: make this dynamic
+	jnPath := filepath.Join(os.Getenv("HOME"), ".local", "bin", "jn")
+	if _, err := os.Stat(jnPath); err != nil {
+		log.Fatal("jn executable not found. Please ensure Just-Notify is installed and in PATH")
 	}
 
 	return jnPath
