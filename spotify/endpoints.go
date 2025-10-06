@@ -313,36 +313,42 @@ func Volume(c *gin.Context) {
 }
 
 func TransferPlayback(c *gin.Context) {
-	fromName := c.Query("from")
 	toName := c.Query("to")
+	volumeStr := c.DefaultQuery("volume", "0")
 
-	if fromName == "" || toName == "" {
+	volume, err := strconv.Atoi(volumeStr)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "from and to are required",
+			"error": "Invalid volume value",
 		})
 		return
 	}
 
-	from := getEnvFromDeviceName(fromName)
+	if toName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "the to parameter is required",
+		})
+		return
+	}
+
+	from := currentEnv
 	to := getEnvFromDeviceName(toName)
+
+	if from == nil || to == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("invalid devices: %s, %s", from.Name, toName),
+		})
+		return
+	}
 
 	if _, err := to.refreshToken(); err != nil {
 		log.Printf("Error refreshing token, setting from file: %s\n", err)
 	}
 
-	if from == nil || to == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("invalid devices: %s, %s", fromName, toName),
-		})
-		return
-	}
-
-	var err error
-
 	// Librespot does not allow playing a queue directly.
 	// For it, i need to transfer the current song and schedule the playlist.
 	if toName == "librespot" || toName == "iPhone" {
-		err = from.hardTransferPlayback(to)
+		err = from.hardTransferPlayback(to, volume)
 	} else {
 		// TODO: Evaluate whether this is necessary; if not, remove it.
 		err = from.transferPlayback(to)

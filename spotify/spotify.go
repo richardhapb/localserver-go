@@ -601,10 +601,6 @@ func (sp *Spotify) transferPlayback(to *Spotify) error {
 		return fmt.Errorf("destination Spotify instance is nil")
 	}
 
-	if _, err := to.refreshToken(); err != nil {
-		return fmt.Errorf("failed to refresh destination token: %w", err)
-	}
-
 	playback, err := sp.getCurrentPlayback()
 	if err != nil {
 		return fmt.Errorf("failed to get current playback: %w", err)
@@ -707,7 +703,7 @@ func (sp *Spotify) pauseCurrentPlayback() error {
 	return nil
 }
 
-func (sp *Spotify) hardTransferPlayback(to *Spotify) error {
+func (sp *Spotify) hardTransferPlayback(to *Spotify, volume int) error {
 	if to == nil {
 		return fmt.Errorf("destination Spotify instance is nil")
 	}
@@ -718,11 +714,14 @@ func (sp *Spotify) hardTransferPlayback(to *Spotify) error {
 		return fmt.Errorf("error retrieving currrent playback: %s", err)
 	}
 
-	volume := 50 // TODO: Make this dynamic
-
-	if playback.Device.SupportsVolume {
-		// Get the volume if it is supported
-		volume = playback.Device.VolumenPercent
+	// Try to get the volume if it is not set
+	if volume == 0 {
+		if playback.Device.SupportsVolume {
+			// Get the volume if it is supported
+			volume = playback.Device.VolumenPercent
+		} else {
+			volume = 50 // Default
+		}
 	}
 
 	// Transfer current track
