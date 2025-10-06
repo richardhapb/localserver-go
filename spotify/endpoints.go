@@ -326,6 +326,10 @@ func TransferPlayback(c *gin.Context) {
 	from := getEnvFromDeviceName(fromName)
 	to := getEnvFromDeviceName(toName)
 
+	if _, err := to.refreshToken(); err != nil {
+		log.Printf("Error refreshing token, setting from file: %s\n", err)
+	}
+
 	if from == nil || to == nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": fmt.Sprintf("invalid devices: %s, %s", fromName, toName),

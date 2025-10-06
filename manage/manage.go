@@ -88,7 +88,7 @@ func newDevicesAttributes() *[]deviceAttributes {
 	})
 
 	da = append(da, deviceAttributes{
-		name:   "arch-richard",
+		name:   "richarch",
 		macEnv: "MAC_ARCH",
 		wakeCommands: []string{
 			"DISPLAY=:0 xset dpms 0 0 600",
@@ -222,12 +222,6 @@ func Sleep(c *gin.Context) {
 	if err != nil {
 		log.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err})
-		return
-	}
-
-	if err := sendWOL(device.mac); err != nil {
-		log.Println(err)
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("WOL failed: %s", err)})
 		return
 	}
 
