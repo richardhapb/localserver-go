@@ -19,10 +19,13 @@ const (
 	maxLimit     = 1000
 )
 
+// CreatedAt is stored as an RFC3339 string in Firestore (written by the
+// Rust client). Keep it as a string here to avoid decode failures, and
+// compare it lexicographically — RFC3339 sorts correctly as strings.
 type SpellcheckLog struct {
-	Original  string    `firestore:"original" json:"original"`
-	Corrected string    `firestore:"corrected" json:"corrected"`
-	CreatedAt time.Time `firestore:"created_at" json:"created_at"`
+	Original  string `firestore:"original" json:"original"`
+	Corrected string `firestore:"corrected" json:"corrected"`
+	CreatedAt string `firestore:"created_at" json:"created_at"`
 }
 
 var client *firestore.Client
@@ -74,28 +77,25 @@ func List(c *gin.Context) {
 	q := client.Collection(collection).OrderBy("created_at", firestore.Desc)
 
 	if v := c.Query("from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, v); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from timestamp"})
 			return
 		}
-		q = q.Where("created_at", ">=", t)
+		q = q.Where("created_at", ">=", v)
 	}
 	if v := c.Query("to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, v); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to timestamp"})
 			return
 		}
-		q = q.Where("created_at", "<", t)
+		q = q.Where("created_at", "<", v)
 	}
 	if v := c.Query("after"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
+		if _, err := time.Parse(time.RFC3339, v); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid after cursor"})
 			return
 		}
-		q = q.StartAfter(t)
+		q = q.StartAfter(v)
 	}
 
 	q = q.Limit(limit)
@@ -131,7 +131,7 @@ func List(c *gin.Context) {
 		"items":      out,
 	}
 	if len(out) == limit {
-		resp["next_after"] = out[len(out)-1].CreatedAt.Format(time.RFC3339Nano)
+		resp["next_after"] = out[len(out)-1].CreatedAt
 	}
 	c.JSON(http.StatusOK, resp)
 }
