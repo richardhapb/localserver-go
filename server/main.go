@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"github.com/gin-gonic/gin"
+	"localserver/corrections"
 	"localserver/manage"
 	"localserver/spotify"
 	"log"
@@ -9,6 +11,11 @@ import (
 
 func CreateServer() {
 	log.Println("Connecting to server...")
+
+	if err := corrections.Init(context.Background()); err != nil {
+		log.Printf("corrections: init failed, endpoint will return 503: %v", err)
+	}
+	defer corrections.Close()
 
 	router := gin.Default()
 	router.SetTrustedProxies(nil)
@@ -42,6 +49,8 @@ func CreateServer() {
 		manageGroup.POST("/jn-init", manage.LaunchJn)
 		manageGroup.POST("/grammar", manage.ReviewGrammar)
 	}
+
+	router.GET("/corrections", corrections.List)
 
 	router.Run(":9000")
 }
