@@ -40,8 +40,7 @@ func TestWriteTokensToFile(t *testing.T) {
 	}
 }
 
-
-func TestReadTokensFromFile(t *testing.T){
+func TestReadTokensFromFile(t *testing.T) {
 	tempFile, err := os.CreateTemp("", "tokens")
 
 	if err != nil {
@@ -62,7 +61,7 @@ func TestReadTokensFromFile(t *testing.T){
 	if tokens.AccessToken != "test_access" {
 		t.Fatalf("Incorrect access token: %s", tokens.AccessToken)
 	}
-	
+
 	if tokens.RefreshToken != "test_refresh" {
 		t.Fatalf("Incorrect access token: %s", tokens.AccessToken)
 	}
@@ -161,5 +160,27 @@ func TestParsePlaylistId(t *testing.T) {
 				t.Errorf("parsePlaylistId() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildSpotifySearchURL(t *testing.T) {
+	got := buildSpotifySearchURL("rock lofi", "playlist", 1)
+	want := "https://api.spotify.com/v1/search?limit=1&q=rock+lofi&type=playlist"
+	if got != want {
+		t.Fatalf("buildSpotifySearchURL() = %q, want %q", got, want)
+	}
+}
+
+func TestFirstPlaylistURIFromSearchResponse(t *testing.T) {
+	body := []byte(`{"playlists":{"items":[{"name":"Lofi Rock","uri":"spotify:playlist:abc123"}]}}`)
+	got, name, err := firstPlaylistURIFromSearchResponse(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "spotify:playlist:abc123" {
+		t.Fatalf("uri = %q", got)
+	}
+	if name != "Lofi Rock" {
+		t.Fatalf("name = %q", name)
 	}
 }

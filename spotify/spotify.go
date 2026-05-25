@@ -339,6 +339,29 @@ func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
 	return sp.makeRequest("PUT", urlStr)
 }
 
+func (sp *Spotify) searchPlaylist(query string) (string, string, error) {
+	if strings.TrimSpace(query) == "" {
+		return "", "", fmt.Errorf("query is required")
+	}
+
+	resp, err := sp.makeRequest("GET", buildSpotifySearchURL(query, "playlist", 1))
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("reading Spotify search response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("Spotify search failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return firstPlaylistURIFromSearchResponse(body)
+}
+
 func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...int) (*http.Response, error) {
 	log.Printf("Playing list with URI %s", contextUri)
 

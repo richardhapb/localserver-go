@@ -1,11 +1,13 @@
 package spotify
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -92,6 +94,37 @@ func schedule(epochMillis int64, action func()) {
 		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
 		action()
 	}()
+}
+
+func buildSpotifySearchURL(query, searchType string, limit int) string {
+	params := url.Values{}
+	params.Set("q", query)
+	params.Set("type", searchType)
+	params.Set("limit", fmt.Sprintf("%d", limit))
+	return "https://api.spotify.com/v1/search?" + params.Encode()
+}
+
+func firstPlaylistURIFromSearchResponse(body []byte) (string, string, error) {
+	var payload struct {
+		Playlists struct {
+			Items []struct {
+				Name string `json:"name"`
+				URI  string `json:"uri"`
+			} `json:"items"`
+		} `json:"playlists"`
+	}
+
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", "", fmt.Errorf("decoding Spotify search response: %w", err)
+	}
+
+	for _, item := range payload.Playlists.Items {
+		if item.URI != "" {
+			return item.URI, item.Name, nil
+		}
+	}
+
+	return "", "", fmt.Errorf("no playlist found")
 }
 
 func printResponseBody(resp *http.Response) {

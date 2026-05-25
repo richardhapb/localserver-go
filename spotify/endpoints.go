@@ -3,6 +3,7 @@ package spotify
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -272,6 +273,70 @@ func PlayPlaylist(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Playlist started successfully",
+	})
+}
+
+func SearchAndPlayPlaylist(c *gin.Context) {
+	query := c.Query("query")
+	volumeStr := c.DefaultQuery("volume", "40")
+	deviceName := c.DefaultQuery("device_name", currentEnv.Devices[0].Name)
+	sp := getEnvFromDeviceName(deviceName)
+
+	if query == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "query is required",
+		})
+		return
+	}
+
+	if sp == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("unknown device_name: %s", deviceName),
+		})
+		return
+	}
+
+	volume, err := strconv.Atoi(volumeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid volume value",
+		})
+		return
+	}
+
+	uri, playlistName, err := sp.searchPlaylist(query)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("Error searching playlist: %v", err),
+		})
+		return
+	}
+
+	resp, err := sp.playPlaylist(uri, volume)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Error playing playlist: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error":    fmt.Sprintf("Spotify playback failed (%d): %s", resp.StatusCode, string(body)),
+			"playlist": playlistName,
+			"uri":      uri,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "Playlist started successfully",
+		"playlist":    playlistName,
+		"uri":         uri,
+		"device_name": deviceName,
+		"volume":      volume,
 	})
 }
 
