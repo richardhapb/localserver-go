@@ -1,55 +1,33 @@
-//go:build gpio
-// +build gpio
-
 package manage
 
 import (
 	"fmt"
-	"github.com/warthog618/go-gpiocdev"
 	"github.com/gin-gonic/gin"
+	"io"
 	"net/http"
 )
 
-
-var lampControl struct {
-	line *gpiocdev.Line
-	on   bool
-}
-
-
-func InitializeLamp() error {
-	var err error
-	lampControl.line, err = gpiocdev.RequestLine("gpiochip0", 17, gpiocdev.AsOutput(0))
-
-	if err != nil {
-		return fmt.Errorf("GPIO initialization failed: %s", err)
-	}
-
-	return nil
-}
+const LAMP_ENDPOINT = "http://192.168.1.50/toggle-lamp"
 
 func ToggleLamp(c *gin.Context) {
-	if lampControl.line == nil {
+	resp, err := http.Get(LAMP_ENDPOINT)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Raspberry Pi pin 17 is not bound,",
+			"error": fmt.Sprintf("Error toggling lamp: %s", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Error reading response: %s", err),
 		})
 		return
 	}
 
-	if lampControl.on {
-		lampControl.line.SetValue(0)
-		lampControl.on = false
-		c.JSON(http.StatusOK, gin.H{
-			"status": "Lamp off",
-		})
-		return
-	}
-
-	lampControl.line.SetValue(1)
-	lampControl.on = true
 	c.JSON(http.StatusOK, gin.H{
-		"status": "Lamp on",
+		"msg": string(body),
 	})
 }
-
-
