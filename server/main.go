@@ -42,12 +42,7 @@ func CreateServer() {
 
 	manageGroup := router.Group("/manage")
 	{
-		manageGroup.GET("/wake", manage.Wake)
-		manageGroup.GET("/sleep", manage.Sleep)
-		manageGroup.GET("/battery", manage.Battery)
 		manageGroup.GET("/lamp", manage.ToggleLamp)
-		manageGroup.GET("/jn-close", manage.TermSignalJn)
-		manageGroup.POST("/jn-init", manage.LaunchJn)
 		manageGroup.POST("/grammar", manage.ReviewGrammar)
 	}
 
