@@ -10,7 +10,12 @@ import (
 
 const LAMP_ENDPOINT = "http://192.168.1.50/toggle-lamp"
 
-var lampClient = &http.Client{Timeout: 3 * time.Second}
+var lampClient = &http.Client{
+	Timeout: 3 * time.Second,
+	// ESP32 TCP is flaky; force a fresh connection per toggle so a pooled,
+	// half-open socket can never carry a duplicate GET (double toggle).
+	Transport: &http.Transport{DisableKeepAlives: true},
+}
 
 func ToggleLamp(c *gin.Context) {
 	req, _ := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, LAMP_ENDPOINT, nil)
