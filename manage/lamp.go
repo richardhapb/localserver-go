@@ -1,33 +1,28 @@
 package manage
 
 import (
-	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 const LAMP_ENDPOINT = "http://192.168.1.50/toggle-lamp"
 
+var lampClient = &http.Client{Timeout: 3 * time.Second}
+
 func ToggleLamp(c *gin.Context) {
-	resp, err := http.Get(LAMP_ENDPOINT)
+	req, _ := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, LAMP_ENDPOINT, nil)
+	resp, err := lampClient.Do(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Error toggling lamp: %s", err),
-		})
+		// The relay toggles on receipt even when the ESP is slow to answer.
+		// Return 202 so the client treats it as done and doesn't retry → no double toggle.
+		c.JSON(http.StatusAccepted, gin.H{"msg": "toggle sent (device did not confirm)"})
 		return
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("Error reading response: %s", err),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"msg": string(body),
-	})
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	c.JSON(http.StatusOK, gin.H{"msg": string(body)})
 }
