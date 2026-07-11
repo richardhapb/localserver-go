@@ -377,20 +377,9 @@ func Volume(c *gin.Context) {
 	})
 }
 
-// filterActiveDevices returns only the devices whose IsActive flag is set,
-// preserving order. The result is always non-nil so it marshals to [] not null.
-func filterActiveDevices(devices []Device) []Device {
-	active := make([]Device, 0, len(devices))
-	for _, device := range devices {
-		if device.IsActive {
-			active = append(active, device)
-		}
-	}
-	return active
-}
-
-// Devices returns the active devices grouped by environment. It refreshes each
-// environment's token and re-queries Spotify so IsActive reflects live state.
+// Devices returns every reachable device grouped by environment. It refreshes
+// each environment's token and queries Spotify for all available devices,
+// regardless of whether one is actively playing.
 func Devices(c *gin.Context) {
 	type envDevices struct {
 		Environment string   `json:"environment"`
@@ -408,13 +397,17 @@ func Devices(c *gin.Context) {
 			log.Printf("Devices: failed to refresh token for %s: %s", name, err)
 		}
 
-		if err := env.updateDevicesData(); err != nil {
-			log.Printf("Devices: failed to update devices for %s: %s", name, err)
+		devices, err := env.fetchDevices()
+		if err != nil {
+			log.Printf("Devices: failed to fetch devices for %s: %s", name, err)
+		}
+		if devices == nil {
+			devices = []Device{}
 		}
 
 		environments = append(environments, envDevices{
 			Environment: name,
-			Devices:     filterActiveDevices(env.Devices),
+			Devices:     devices,
 		})
 	}
 

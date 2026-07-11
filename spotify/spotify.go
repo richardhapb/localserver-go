@@ -161,6 +161,10 @@ func (sp *Spotify) String() string {
 }
 
 func (sp *Spotify) updateDevicesData() error {
+	if sp.tokens == nil {
+		return fmt.Errorf("no tokens loaded for env %q", sp.Name)
+	}
+
 	urlStr := "https://api.spotify.com/v1/me/player/devices"
 
 	req, err := http.NewRequest("GET", urlStr, nil)
@@ -197,6 +201,35 @@ func (sp *Spotify) updateDevicesData() error {
 	}
 
 	return nil
+}
+
+// fetchDevices returns every device Spotify currently reports as reachable for
+// this environment, regardless of whether one is actively playing.
+func (sp *Spotify) fetchDevices() ([]Device, error) {
+	if sp.tokens == nil {
+		return nil, fmt.Errorf("no tokens loaded for env %q", sp.Name)
+	}
+
+	req, err := http.NewRequest("GET", "https://api.spotify.com/v1/me/player/devices", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", sp.tokens.AccessToken))
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var devicesResponse struct {
+		Devices []Device `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode devices response: %w", err)
+	}
+
+	return devicesResponse.Devices, nil
 }
 
 func (sp *Spotify) getActiveDevice() *Device {
@@ -474,6 +507,10 @@ func getEnvFromDeviceName(deviceName string) *Spotify {
 }
 
 func (sp *Spotify) refreshToken() (string, error) {
+
+	if sp.tokens == nil {
+		return "", fmt.Errorf("no tokens loaded for env %q", sp.Name)
+	}
 
 	// Use url.Values for proper form encoding
 	data := url.Values{

@@ -4,56 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
 
-func TestFilterActiveDevices(t *testing.T) {
-	tests := []struct {
-		name  string
-		input []Device
-		want  []Device
-	}{
-		{
-			name:  "nil slice returns empty",
-			input: nil,
-			want:  []Device{},
-		},
-		{
-			name: "no active devices",
-			input: []Device{
-				{Name: "iPhone", IsActive: false},
-				{Name: "MacBook", IsActive: false},
-			},
-			want: []Device{},
-		},
-		{
-			name: "filters and preserves order",
-			input: []Device{
-				{Name: "iPhone", IsActive: false},
-				{Name: "librespot", IsActive: true},
-				{Name: "MacBook", IsActive: false},
-				{Name: "Speaker", IsActive: true},
-			},
-			want: []Device{
-				{Name: "librespot", IsActive: true},
-				{Name: "Speaker", IsActive: true},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := filterActiveDevices(tt.input)
-			if got == nil {
-				t.Fatal("filterActiveDevices() returned nil, want non-nil slice")
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("filterActiveDevices() = %v, want %v", got, tt.want)
-			}
-		})
+func TestFetchDevicesNilTokens(t *testing.T) {
+	sp := &Spotify{Name: "home"}
+	if _, err := sp.fetchDevices(); err == nil {
+		t.Fatal("fetchDevices() with nil tokens = nil error, want error")
 	}
 }
 
