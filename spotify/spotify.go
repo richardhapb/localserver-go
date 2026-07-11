@@ -232,63 +232,47 @@ func (sp *Spotify) fetchDevices() ([]Device, error) {
 	return devicesResponse.Devices, nil
 }
 
-func (sp *Spotify) getActiveDevice() *Device {
-	err := sp.updateDevicesData()
-
-	if err != nil {
-		return nil
-	}
-
-	for _, device := range sp.Devices {
-		if device.IsActive {
-			return &device
-		}
-	}
-
-	// Return the first one as the default
-	return &sp.Devices[0]
-}
-
-func (sp *Spotify) getActiveDeviceId() string {
-	if device := sp.getActiveDevice(); device != nil {
-		if device.ID != "" {
-			return device.ID
-		}
-	}
-
-	return ""
-}
-
-func (sp *Spotify) getDeviceId(deviceName string) (string, error) {
-
+// deviceByName looks up a reachable device by name from the live Spotify device
+// list. Returns (nil, nil) when the name isn't currently reachable, so callers
+// can distinguish "not reachable" from "Spotify unreachable" (error).
+func (sp *Spotify) deviceByName(deviceName string) (*Device, error) {
 	if deviceName == "" {
-		return "", fmt.Errorf("device name is empty")
+		return nil, fmt.Errorf("device name is empty")
 	}
 
-	log.Printf("Retrieving id for device %s\n", deviceName)
-
-	err := sp.updateDevicesData()
-
+	devices, err := sp.fetchDevices()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	deviceId := ""
-	log.Printf("Devices found: %v", sp.Devices)
-
-	for _, device := range sp.Devices {
-		if device.Name == deviceName {
-			deviceId = device.ID
-		}
-
-		if deviceId != "" {
-			break
+	for i := range devices {
+		if devices[i].Name == deviceName {
+			return &devices[i], nil
 		}
 	}
 
-	log.Println(fmt.Sprintf("Device id found: %s", deviceId))
+	return nil, nil
+}
 
-	return deviceId, nil
+// activeDevice returns the currently active reachable device, falling back to
+// the first reachable one. Returns (nil, nil) when nothing is reachable.
+func (sp *Spotify) activeDevice() (*Device, error) {
+	devices, err := sp.fetchDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range devices {
+		if devices[i].IsActive {
+			return &devices[i], nil
+		}
+	}
+
+	if len(devices) > 0 {
+		return &devices[0], nil
+	}
+
+	return nil, nil
 }
 
 func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*http.Response, error) {
@@ -326,46 +310,36 @@ func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*h
 	return resp, nil
 }
 
-func (sp *Spotify) appendDeviceId(baseUrl string) string {
-	deviceId := sp.getActiveDeviceId()
-	if deviceId == "" {
-		return baseUrl
+// appendDeviceID adds the target device_id to a Spotify player URL so the
+// request lands on the requested device instead of Spotify's "active" default.
+func appendDeviceID(baseURL, deviceID string) string {
+	if deviceID == "" {
+		return baseURL
 	}
-	u, err := url.Parse(baseUrl)
+	u, err := url.Parse(baseURL)
 	if err != nil {
 		log.Printf("Error parsing URL: %v", err)
-		return baseUrl
+		return baseURL
 	}
 	q := u.Query()
-	q.Set("device_id", deviceId)
+	q.Set("device_id", deviceID)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
-func (sp *Spotify) setVolume(volumePercent int) (*http.Response, error) {
-	device := sp.getActiveDevice()
-
-	if device == nil {
-		return nil, fmt.Errorf("device not found")
-	}
-
-	log.Println(device)
-
-	if !device.SupportsVolume {
+func (sp *Spotify) setVolume(deviceID string, volumePercent int, supportsVolume bool) (*http.Response, error) {
+	if !supportsVolume {
 		return nil, fmt.Errorf("device doesn't support volume")
 	}
 
-	log.Printf("Setting volume to %d", volumePercent)
+	log.Printf("Setting volume to %d on device %s", volumePercent, deviceID)
 
 	baseUrl := "https://api.spotify.com/v1/me/player/volume"
-	deviceId, err := sp.getDeviceId(device.Name)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting device Id: %s", err)
-	}
-
 	params := url.Values{}
 	params.Set("volume_percent", strconv.Itoa(volumePercent))
-	params.Set("device_id", deviceId)
+	if deviceID != "" {
+		params.Set("device_id", deviceID)
+	}
 
 	urlStr := baseUrl + "?" + params.Encode()
 
@@ -395,8 +369,15 @@ func (sp *Spotify) searchPlaylist(query string) (string, string, error) {
 	return firstPlaylistURIFromSearchResponse(body)
 }
 
-func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...int) (*http.Response, error) {
+func (sp *Spotify) playPlaylist(device *Device, contextUri string, volumePercent int, args ...int) (*http.Response, error) {
 	log.Printf("Playing list with URI %s", contextUri)
+
+	deviceID := ""
+	supportsVolume := false
+	if device != nil {
+		deviceID = device.ID
+		supportsVolume = device.SupportsVolume
+	}
 
 	requestBody := map[string]any{
 		"context_uri": contextUri,
@@ -449,33 +430,31 @@ func (sp *Spotify) playPlaylist(contextUri string, volumePercent int, args ...in
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	urlStr := sp.appendDeviceId(PlayEndpoint)
+	urlStr := appendDeviceID(PlayEndpoint, deviceID)
 
-	device := sp.getActiveDevice()
-
-	if device != nil && device.SupportsVolume {
-		sp.setVolume(volumePercent)
+	if supportsVolume {
+		sp.setVolume(deviceID, volumePercent, supportsVolume)
 	}
 
 	go func() {
 		time.Sleep(5 * time.Second)
-		sp.toggleShuffle(true)
-		sp.enableRepeat("context")
+		sp.toggleShuffle(deviceID, true)
+		sp.enableRepeat(deviceID, "context")
 	}()
 
 	return sp.makeRequest("PUT", urlStr, jsonBody)
 }
 
-func (sp *Spotify) playPlayback() (*http.Response, error) {
-	urlStr := sp.appendDeviceId(PlayEndpoint)
+func (sp *Spotify) playPlayback(deviceID string) (*http.Response, error) {
+	urlStr := appendDeviceID(PlayEndpoint, deviceID)
 
 	return sp.makeRequest("PUT", urlStr)
 }
 
-func (sp *Spotify) pausePlayback() (*http.Response, error) {
+func (sp *Spotify) pausePlayback(deviceID string) (*http.Response, error) {
 	baseUrl := "https://api.spotify.com/v1/me/player/pause"
 
-	urlStr := sp.appendDeviceId(baseUrl)
+	urlStr := appendDeviceID(baseUrl, deviceID)
 
 	return sp.makeRequest("PUT", urlStr)
 }
@@ -571,7 +550,7 @@ func (sp *Spotify) refreshToken() (string, error) {
 	return tokenResp.AccessToken, nil
 }
 
-func (sp *Spotify) toggleShuffle(state bool) {
+func (sp *Spotify) toggleShuffle(deviceID string, state bool) {
 	stateStr := ""
 	if state {
 		stateStr = "true"
@@ -580,7 +559,7 @@ func (sp *Spotify) toggleShuffle(state bool) {
 	}
 
 	baseUrl := fmt.Sprintf("https://api.spotify.com/v1/me/player/shuffle?state=%s", stateStr)
-	urlStr := sp.appendDeviceId(baseUrl)
+	urlStr := appendDeviceID(baseUrl, deviceID)
 
 	sp.makeRequest("PUT", urlStr)
 }
@@ -591,10 +570,10 @@ func (sp *Spotify) toggleShuffle(state bool) {
 // context will repeat the current context.
 // off will turn repeat off.
 // Example: state=context
-func (sp *Spotify) enableRepeat(state string) {
+func (sp *Spotify) enableRepeat(deviceID, state string) {
 	baseUrl := fmt.Sprintf("https://api.spotify.com/v1/me/player/repeat?state=%s", state)
 
-	urlStr := sp.appendDeviceId(baseUrl)
+	urlStr := appendDeviceID(baseUrl, deviceID)
 
 	sp.makeRequest("PUT", urlStr)
 }
@@ -656,9 +635,14 @@ func (sp *Spotify) getUserQueue() (*UserQueue, error) {
 }
 
 // Migrate callback from one account to anoter
-func (sp *Spotify) transferPlayback(to *Spotify) error {
+func (sp *Spotify) transferPlayback(to *Spotify, toDevice *Device) error {
 	if to == nil {
 		return fmt.Errorf("destination Spotify instance is nil")
+	}
+
+	toDeviceID := ""
+	if toDevice != nil {
+		toDeviceID = toDevice.ID
 	}
 
 	playback, err := sp.getCurrentPlayback()
@@ -704,14 +688,14 @@ func (sp *Spotify) transferPlayback(to *Spotify) error {
 	}
 
 	log.Println("Playing on another device...")
-	if _, err = to.playUris(uris, playback.ProgressMs); err != nil {
+	if _, err = to.playUris(toDeviceID, uris, playback.ProgressMs); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (sp *Spotify) playUris(uris []string, positionMs int) (*http.Response, error) {
+func (sp *Spotify) playUris(deviceID string, uris []string, positionMs int) (*http.Response, error) {
 	if len(uris) == 0 {
 		return nil, fmt.Errorf("no URIs provided")
 	}
@@ -729,7 +713,7 @@ func (sp *Spotify) playUris(uris []string, positionMs int) (*http.Response, erro
 
 	log.Printf("Attempting to play %d track(s) at position %d ms", len(uris), positionMs)
 
-	urlStr := sp.appendDeviceId(PlayEndpoint)
+	urlStr := appendDeviceID(PlayEndpoint, deviceID)
 
 	resp, err := sp.makeRequest("PUT", urlStr, jsonBody)
 
@@ -747,15 +731,17 @@ func (sp *Spotify) playUris(uris []string, positionMs int) (*http.Response, erro
 	return resp, err
 }
 
-// Helper method to pause current playback with proper error handling
+// Helper method to pause current playback with proper error handling.
+// Passing an empty deviceID pauses whichever device is currently active.
 func (sp *Spotify) pauseCurrentPlayback() error {
-	resp, err := sp.pausePlayback()
+	resp, err := sp.pausePlayback("")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// Spotify returns 204 No Content on a successful pause.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to pause playback (status %d): %s", resp.StatusCode, string(body))
 	}
@@ -763,7 +749,7 @@ func (sp *Spotify) pauseCurrentPlayback() error {
 	return nil
 }
 
-func (sp *Spotify) hardTransferPlayback(to *Spotify, volume int) error {
+func (sp *Spotify) hardTransferPlayback(to *Spotify, toDevice *Device, volume int) error {
 	if to == nil {
 		return fmt.Errorf("destination Spotify instance is nil")
 	}
@@ -795,7 +781,7 @@ func (sp *Spotify) hardTransferPlayback(to *Spotify, volume int) error {
 	}
 
 	trackNumber := to.getTrackNumber(playback.Context.Uri, playback.Item.Name)
-	resp, err := to.playPlaylist(playback.Context.Uri, volume, trackNumber, playback.ProgressMs)
+	resp, err := to.playPlaylist(toDevice, playback.Context.Uri, volume, trackNumber, playback.ProgressMs)
 
 	if err != nil {
 		return fmt.Errorf("error playing uris: %s", err)

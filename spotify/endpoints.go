@@ -153,6 +153,36 @@ func Callback(c *gin.Context) {
 	})
 }
 
+// resolveTargetDevice finds the requested device in sp's live device list. On
+// failure it writes the appropriate error response and returns ok=false, so the
+// caller can just `return`.
+func resolveTargetDevice(c *gin.Context, sp *Spotify, deviceName string) (*Device, bool) {
+	device, err := sp.deviceByName(deviceName)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("could not reach Spotify to resolve device: %v", err),
+		})
+		return nil, false
+	}
+	if device == nil {
+		c.JSON(http.StatusFailedDependency, gin.H{
+			"error": fmt.Sprintf("device %q is not currently reachable; open the Spotify app on it and retry", deviceName),
+		})
+		return nil, false
+	}
+	return device, true
+}
+
+// playbackError reports a non-2xx Spotify playback response as an error. The
+// body must not have been consumed yet.
+func playbackError(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	return fmt.Errorf("spotify returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
 func Play(c *gin.Context) {
 	deviceName := c.Query("device_name")
 
@@ -164,16 +194,32 @@ func Play(c *gin.Context) {
 	}
 
 	sp := getEnvFromDeviceName(deviceName)
-
-	_, err := sp.playPlayback()
-	if err == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Music playing successfully",
-		})
+	if sp == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown device_name: %s", deviceName)})
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "failed to play playback"})
+	device, ok := resolveTargetDevice(c, sp, deviceName)
+	if !ok {
+		return
+	}
+
+	resp, err := sp.playPlayback(device.ID)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to play playback: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+
+	if err := playbackError(resp); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to play playback: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "Music playing successfully",
+		"device_name": deviceName,
+	})
 }
 
 func Pause(c *gin.Context) {
@@ -187,16 +233,32 @@ func Pause(c *gin.Context) {
 	}
 
 	sp := getEnvFromDeviceName(deviceName)
-
-	_, err := sp.pausePlayback()
-	if err == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Music paused successfully",
-		})
+	if sp == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown device_name: %s", deviceName)})
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, gin.H{"error": "failed to pause playback"})
+	device, ok := resolveTargetDevice(c, sp, deviceName)
+	if !ok {
+		return
+	}
+
+	resp, err := sp.pausePlayback(device.ID)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to pause playback: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+
+	if err := playbackError(resp); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to pause playback: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "Music paused successfully",
+		"device_name": deviceName,
+	})
 }
 
 func Schedule(c *gin.Context) {
@@ -215,14 +277,15 @@ func Schedule(c *gin.Context) {
 	switch action {
 	case "alarm":
 		fn = func() {
-			currentEnv.playPlaylist(
-				RelaxPlaylistUri,
-				60,
-			)
+			device, err := currentEnv.activeDevice()
+			if err != nil {
+				log.Printf("alarm: could not resolve device: %v", err)
+			}
+			currentEnv.playPlaylist(device, RelaxPlaylistUri, 60)
 		}
 	case "sleep":
 		fn = func() {
-			currentEnv.pausePlayback()
+			currentEnv.pausePlayback("")
 		}
 	}
 
@@ -254,6 +317,11 @@ func PlayPlaylist(c *gin.Context) {
 		return
 	}
 
+	if sp == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown device_name: %s", deviceName)})
+		return
+	}
+
 	volume, err := strconv.Atoi(volumeStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -262,17 +330,32 @@ func PlayPlaylist(c *gin.Context) {
 		return
 	}
 
-	resp, err := sp.playPlaylist(uri, volume)
+	device, ok := resolveTargetDevice(c, sp, deviceName)
+	if !ok {
+		return
+	}
+
+	resp, err := sp.playPlaylist(device, uri, volume)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusBadGateway, gin.H{
 			"error": fmt.Sprintf("Error playing playlist: %v", err),
 		})
 		return
 	}
 	defer resp.Body.Close()
 
+	if err := playbackError(resp); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("Error playing playlist: %v", err),
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Playlist started successfully",
+		"message":     "Playlist started successfully",
+		"uri":         uri,
+		"device_name": deviceName,
+		"volume":      volume,
 	})
 }
 
@@ -304,6 +387,11 @@ func SearchAndPlayPlaylist(c *gin.Context) {
 		return
 	}
 
+	device, ok := resolveTargetDevice(c, sp, deviceName)
+	if !ok {
+		return
+	}
+
 	uri, playlistName, err := sp.searchPlaylist(query)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -312,19 +400,18 @@ func SearchAndPlayPlaylist(c *gin.Context) {
 		return
 	}
 
-	resp, err := sp.playPlaylist(uri, volume)
+	resp, err := sp.playPlaylist(device, uri, volume)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusBadGateway, gin.H{
 			"error": fmt.Sprintf("Error playing playlist: %v", err),
 		})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
+	if err := playbackError(resp); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
-			"error":    fmt.Sprintf("Spotify playback failed (%d): %s", resp.StatusCode, string(body)),
+			"error":    fmt.Sprintf("Spotify playback failed: %v", err),
 			"playlist": playlistName,
 			"uri":      uri,
 		})
@@ -360,7 +447,22 @@ func Volume(c *gin.Context) {
 		return
 	}
 
-	resp, err := currentEnv.setVolume(volume)
+	device, err := currentEnv.activeDevice()
+	if err != nil {
+		log.Println(err)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("could not reach Spotify to resolve device: %v", err),
+		})
+		return
+	}
+	if device == nil {
+		c.JSON(http.StatusFailedDependency, gin.H{
+			"error": "no reachable device to set volume on",
+		})
+		return
+	}
+
+	resp, err := currentEnv.setVolume(device.ID, volume, device.SupportsVolume)
 
 	if err != nil {
 		log.Println(err)
@@ -369,8 +471,12 @@ func Volume(c *gin.Context) {
 		})
 		return
 	}
+	defer resp.Body.Close()
 
-	resp.Body.Close()
+	if err := playbackError(resp); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("failed to set volume: %v", err)})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Volume setted successfully",
@@ -440,7 +546,7 @@ func TransferPlayback(c *gin.Context) {
 
 	if from == nil || to == nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("invalid devices: %s, %s", from.Name, toName),
+			"error": fmt.Sprintf("invalid devices: to=%s", toName),
 		})
 		return
 	}
@@ -449,13 +555,18 @@ func TransferPlayback(c *gin.Context) {
 		log.Printf("Error refreshing token, setting from file: %s\n", err)
 	}
 
+	toDevice, ok := resolveTargetDevice(c, to, toName)
+	if !ok {
+		return
+	}
+
 	// Librespot does not allow playing a queue directly.
 	// For it, i need to transfer the current song and schedule the playlist.
 	if toName == "librespot" || toName == "iPhone" {
-		err = from.hardTransferPlayback(to, volume)
+		err = from.hardTransferPlayback(to, toDevice, volume)
 	} else {
 		// TODO: Evaluate whether this is necessary; if not, remove it.
-		err = from.transferPlayback(to)
+		err = from.transferPlayback(to, toDevice)
 	}
 
 	if err != nil {
