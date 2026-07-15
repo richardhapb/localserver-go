@@ -125,7 +125,7 @@ func new(environment Environment) *Spotify {
 	switch environment {
 	case Main:
 		envPrefix = "MAIN_"
-		sp.Devices = []Device{{"", "iPhone", false, defaultVolume, false}, {"", "MacBook Air de Richard", false, defaultVolume, true}}
+		sp.Devices = []Device{{"", "iPhone", false, defaultVolume, false}, {"", "MacBook Air de Richard", false, defaultVolume, true}, {"", "MD3HKDVJW4", false, defaultVolume, true}}
 	case Home:
 		envPrefix = "HOME_"
 		sp.Devices = []Device{{"", "librespot", false, defaultVolume, true}}

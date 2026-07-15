@@ -25,6 +25,29 @@ func TestDeviceByNameNilTokens(t *testing.T) {
 	}
 }
 
+func TestGetEnvFromDeviceNameAcceptsCheckrMacBook(t *testing.T) {
+	saved := envs
+	envs = map[string]*Spotify{
+		string(Main): {
+			Name:    string(Main),
+			Devices: []Device{{Name: "iPhone"}, {Name: "MacBook Air de Richard"}, {Name: "MD3HKDVJW4"}},
+		},
+		string(Home): {
+			Name:    string(Home),
+			Devices: []Device{{Name: "librespot"}},
+		},
+	}
+	defer func() { envs = saved }()
+
+	got := getEnvFromDeviceName("MD3HKDVJW4")
+	if got == nil {
+		t.Fatal("getEnvFromDeviceName() returned nil, want main environment")
+	}
+	if got.Name != string(Main) {
+		t.Fatalf("getEnvFromDeviceName() returned %q, want %q", got.Name, Main)
+	}
+}
+
 // The core of the bug fix: playback URLs must carry the requested device_id so
 // Spotify targets it instead of falling back to some "active" default.
 func TestAppendDeviceID(t *testing.T) {
