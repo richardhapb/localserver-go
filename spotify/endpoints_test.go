@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -236,6 +238,102 @@ func TestParseTokenRefresh(t *testing.T) {
 	t.Run("success without an access token is an error", func(t *testing.T) {
 		if _, err := parseTokenRefresh(http.StatusOK, []byte(`{"expires_in":3600}`), current); err == nil {
 			t.Fatal("err = nil, want error")
+		}
+	})
+}
+
+// Only the scopes the server actually calls should be requested. app-remote-control
+// (iOS/Android SDKs) and user-read-recently-played were asked for and never used.
+func TestAuthorizeURLScopes(t *testing.T) {
+	sp := &Spotify{
+		Name:        "home",
+		ClientId:    "client-123",
+		CallbackUri: "http://rpi:9000/spotify/callback",
+	}
+
+	parsed, err := url.Parse(authorizeURL(sp))
+	if err != nil {
+		t.Fatalf("parse authorize URL: %v", err)
+	}
+
+	if parsed.Host != "accounts.spotify.com" || parsed.Path != "/authorize" {
+		t.Errorf("authorize endpoint = %q, want accounts.spotify.com/authorize", parsed.Host+parsed.Path)
+	}
+
+	query := parsed.Query()
+	if got := query.Get("response_type"); got != "code" {
+		t.Errorf("response_type = %q, want %q", got, "code")
+	}
+	if got := query.Get("client_id"); got != sp.ClientId {
+		t.Errorf("client_id = %q, want %q", got, sp.ClientId)
+	}
+	if got := query.Get("redirect_uri"); got != sp.CallbackUri {
+		t.Errorf("redirect_uri = %q, want %q", got, sp.CallbackUri)
+	}
+
+	got := strings.Fields(query.Get("scope"))
+	want := []string{
+		"user-read-playback-state",
+		"user-modify-playback-state",
+		"user-read-currently-playing",
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("scope = %v, want %v", got, want)
+	}
+}
+
+// The middleware must stop a request whose grant is dead instead of letting it
+// run on a stale access token and fail further downstream.
+func TestAbortIfReauthRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sp := &Spotify{Name: "home"}
+
+	t.Run("dead grant aborts with 401", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		if !abortIfReauthRequired(c, sp, fmt.Errorf("%w: Refresh token revoked", ErrReauthRequired)) {
+			t.Fatal("abortIfReauthRequired() = false, want true")
+		}
+		if !c.IsAborted() {
+			t.Error("context not aborted, downstream handlers would still run")
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+
+		var body struct {
+			Fix string `json:"fix"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if body.Fix != "/spotify/login?env=home" {
+			t.Errorf("fix = %q, want %q", body.Fix, "/spotify/login?env=home")
+		}
+	})
+
+	t.Run("devices reports auth state instead of aborting", func(t *testing.T) {
+		if !skipsReauthAbort("/spotify/devices") {
+			t.Error("/spotify/devices must survive a dead grant to report which env needs a login")
+		}
+		for _, path := range []string{"/spotify/play", "/spotify/playlist", "/spotify/volume"} {
+			if skipsReauthAbort(path) {
+				t.Errorf("%s must abort on a dead grant", path)
+			}
+		}
+	})
+
+	t.Run("transient failure lets the request continue", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		if abortIfReauthRequired(c, sp, errors.New("executing request: connection reset")) {
+			t.Fatal("abortIfReauthRequired() = true, want false")
+		}
+		if c.IsAborted() {
+			t.Error("context aborted on a transient error, want the request to continue")
 		}
 	})
 }

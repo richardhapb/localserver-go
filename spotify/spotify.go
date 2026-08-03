@@ -174,7 +174,7 @@ func (sp *Spotify) String() string {
 
 func (sp *Spotify) updateDevicesData() error {
 	if sp.tokens == nil {
-		return fmt.Errorf("no tokens loaded for env %q", sp.Name)
+		return fmt.Errorf("%w: no tokens loaded for env %q", ErrReauthRequired, sp.Name)
 	}
 
 	urlStr := "https://api.spotify.com/v1/me/player/devices"
@@ -221,7 +221,7 @@ func (sp *Spotify) updateDevicesData() error {
 // this environment, regardless of whether one is actively playing.
 func (sp *Spotify) fetchDevices() ([]Device, error) {
 	if sp.tokens == nil {
-		return nil, fmt.Errorf("no tokens loaded for env %q", sp.Name)
+		return nil, fmt.Errorf("%w: no tokens loaded for env %q", ErrReauthRequired, sp.Name)
 	}
 
 	req, err := http.NewRequest("GET", "https://api.spotify.com/v1/me/player/devices", nil)
@@ -524,7 +524,7 @@ func getEnvFromDeviceName(deviceName string) *Spotify {
 func (sp *Spotify) refreshToken() (string, error) {
 
 	if sp.tokens == nil {
-		return "", fmt.Errorf("no tokens loaded for env %q", sp.Name)
+		return "", fmt.Errorf("%w: no tokens loaded for env %q", ErrReauthRequired, sp.Name)
 	}
 
 	// Use url.Values for proper form encoding

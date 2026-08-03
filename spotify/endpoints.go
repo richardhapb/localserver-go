@@ -47,11 +47,13 @@ func SpotifyMiddleware() gin.HandlerFunc {
 		}
 
 		if _, err := currentEnv.refreshToken(); err != nil {
-			if errors.Is(err, ErrReauthRequired) {
-				log.Printf("Env %s needs a new login (%s): %s\n", currentEnv.Name, currentEnv.reauthURL(), err)
-			} else {
-				log.Printf("Error refreshing token, setting from file: %s\n", err)
+			// A dead grant cannot be rescued by the token on disk, and going
+			// ahead with it only turns a login problem into a misleading
+			// downstream failure.
+			if !skipsReauthAbort(c.FullPath()) && abortIfReauthRequired(c, currentEnv, err) {
+				return
 			}
+			log.Printf("Error refreshing token, setting from file: %s\n", err)
 		}
 
 		c.Next()
@@ -81,24 +83,28 @@ func Login(c *gin.Context) {
 	sp := new(Environment(environment))
 	updateEnv(sp)
 
-	scopeList := []string{
-		"user-read-playback-state",
-		"user-modify-playback-state",
-		"user-read-currently-playing",
-		"app-remote-control",
-		"user-read-recently-played",
-	}
-	scope := strings.Join(scopeList, " ")
+	c.Redirect(http.StatusTemporaryRedirect, authorizeURL(sp))
+}
 
+// authScopes is every scope this server actually needs. The playback reads
+// cover GET /me/player, /me/player/devices and /me/player/queue; the write
+// covers play, pause, volume, shuffle and repeat. Search and public playlist
+// reads need no scope at all.
+var authScopes = []string{
+	"user-read-playback-state",
+	"user-modify-playback-state",
+	"user-read-currently-playing",
+}
+
+// authorizeURL builds the Spotify consent URL for an environment.
+func authorizeURL(sp *Spotify) string {
 	params := url.Values{}
 	params.Set("client_id", sp.ClientId)
 	params.Set("response_type", "code")
 	params.Set("redirect_uri", sp.CallbackUri)
-	params.Set("scope", scope)
+	params.Set("scope", strings.Join(authScopes, " "))
 
-	authUrl := "https://accounts.spotify.com/authorize?" + params.Encode()
-
-	c.Redirect(http.StatusTemporaryRedirect, authUrl)
+	return "https://accounts.spotify.com/authorize?" + params.Encode()
 }
 
 // Handle the Spotify callback when login
@@ -176,15 +182,36 @@ func resolveTargetDevice(c *gin.Context, sp *Spotify, deviceName string) (*Devic
 	return device, true
 }
 
+// skipsReauthAbort reports whether a route reports auth state itself, per
+// environment. /devices is the endpoint you hit to find out which environment
+// needs a login, so a dead grant must not abort it -- the other environment's
+// devices are still worth reporting.
+func skipsReauthAbort(path string) bool {
+	return path == "/spotify/devices"
+}
+
+// abortIfReauthRequired answers 401 with the login URL when err means the
+// environment's grant is dead, and reports whether it handled the request.
+func abortIfReauthRequired(c *gin.Context, sp *Spotify, err error) bool {
+	if !errors.Is(err, ErrReauthRequired) {
+		return false
+	}
+
+	log.Printf("Env %s needs a new login (%s): %s\n", sp.Name, sp.reauthURL(), err)
+
+	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+		"error": fmt.Sprintf("Spotify authorization for env %q is no longer valid: %v", sp.Name, err),
+		"fix":   sp.reauthURL(),
+	})
+
+	return true
+}
+
 // respondDeviceLookupError writes the response for a failed device lookup. A
 // dead grant is reported as 401 plus the login URL that fixes it, so it is not
 // confused with Spotify being unreachable.
 func respondDeviceLookupError(c *gin.Context, sp *Spotify, err error) {
-	if errors.Is(err, ErrReauthRequired) {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": fmt.Sprintf("Spotify authorization for env %q is no longer valid: %v", sp.Name, err),
-			"fix":   sp.reauthURL(),
-		})
+	if abortIfReauthRequired(c, sp, err) {
 		return
 	}
 
