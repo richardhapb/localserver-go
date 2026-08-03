@@ -3,6 +3,7 @@ package spotify
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,17 @@ var (
 	envs       = make(map[string]*Spotify)
 	debugMode  = os.Getenv("DEBUG") == "true"
 )
+
+// ErrReauthRequired means the stored grant for an environment is no longer
+// usable (refresh token revoked, or Spotify rejecting the access token). The
+// only fix is a fresh /spotify/login?env=<name>, so handlers must not report it
+// as "device unreachable".
+var ErrReauthRequired = errors.New("re-authorization required")
+
+// reauthURL is the path the user has to hit to restore an environment.
+func (sp *Spotify) reauthURL() string {
+	return fmt.Sprintf("/spotify/login?env=%s", sp.Name)
+}
 
 const (
 	CurrentPlaybackEndpoint = "https://api.spotify.com/v1/me/player"
@@ -183,15 +195,17 @@ func (sp *Spotify) updateDevicesData() error {
 
 	defer resp.Body.Close()
 
-	var devicesResponse struct {
-		Devices []Device `json:"devices"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return fmt.Errorf("Failed in request when retrieving device: %w", err)
 	}
 
-	for _, device := range devicesResponse.Devices {
+	devices, err := parseDevicesResponse(resp.StatusCode, body)
+	if err != nil {
+		return err
+	}
+
+	for _, device := range devices {
 		for i := range sp.Devices {
 			if sp.Devices[i].Name == device.Name {
 				sp.Devices[i].ID = device.ID
@@ -222,10 +236,32 @@ func (sp *Spotify) fetchDevices() ([]Device, error) {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read devices response: %w", err)
+	}
+
+	return parseDevicesResponse(resp.StatusCode, body)
+}
+
+// parseDevicesResponse turns a /me/player/devices reply into a device list. A
+// rejected token yields ErrReauthRequired instead of an empty list -- decoding
+// the error body into the devices struct would otherwise succeed and look like
+// "no devices reachable".
+func parseDevicesResponse(status int, body []byte) ([]Device, error) {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return nil, fmt.Errorf("%w: Spotify rejected the access token (%d): %s",
+			ErrReauthRequired, status, strings.TrimSpace(string(body)))
+	}
+
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("spotify returned %d: %s", status, strings.TrimSpace(string(body)))
+	}
+
 	var devicesResponse struct {
 		Devices []Device `json:"devices"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&devicesResponse); err != nil {
+	if err := json.Unmarshal(body, &devicesResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode devices response: %w", err)
 	}
 
@@ -517,37 +553,73 @@ func (sp *Spotify) refreshToken() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// Check response status
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("bad response (%d): %s", resp.StatusCode, body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
 	}
 
-	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		ExpiresIn   int    `json:"expires_in"`
+	tokens, err := parseTokenRefresh(resp.StatusCode, body, sp.tokens)
+	if err != nil {
+		return "", err
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", fmt.Errorf("decoding response: %w", err)
+	if tokens.RefreshToken != sp.tokens.RefreshToken {
+		log.Printf("Spotify rotated the refresh token for env %s, storing the new one", sp.Name)
 	}
 
-	if tokenResp.AccessToken == "" {
-		return "", fmt.Errorf("no access token in response")
-	}
-
-	sp.tokens.AccessToken = tokenResp.AccessToken
+	sp.tokens = tokens
 
 	// Update file with new tokens
-	if err := writeTokensToFile(&Tokens{
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: sp.tokens.RefreshToken,
-	}, sp.tokensFilePath); err != nil {
+	if err := writeTokensToFile(tokens, sp.tokensFilePath); err != nil {
 		return "", fmt.Errorf("writing tokens: %w", err)
 	}
 
-	return tokenResp.AccessToken, nil
+	return tokens.AccessToken, nil
+}
+
+// parseTokenRefresh reads a /api/token refresh reply. Spotify may hand back a
+// rotated refresh token; keeping the old one would get the whole grant revoked,
+// so the new one wins whenever it is present. An invalid_grant reply means the
+// stored refresh token is dead and only a fresh login can recover it.
+func parseTokenRefresh(status int, body []byte, current *Tokens) (*Tokens, error) {
+	if status != http.StatusOK {
+		var errResp struct {
+			Error       string `json:"error"`
+			Description string `json:"error_description"`
+		}
+		_ = json.Unmarshal(body, &errResp)
+
+		if errResp.Error == "invalid_grant" {
+			return nil, fmt.Errorf("%w: %s", ErrReauthRequired, strings.TrimSpace(errResp.Description))
+		}
+
+		return nil, fmt.Errorf("bad response (%d): %s", status, strings.TrimSpace(string(body)))
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("no access token in response")
+	}
+
+	refreshToken := ""
+	if current != nil {
+		refreshToken = current.RefreshToken
+	}
+	if tokenResp.RefreshToken != "" {
+		refreshToken = tokenResp.RefreshToken
+	}
+
+	return &Tokens{AccessToken: tokenResp.AccessToken, RefreshToken: refreshToken}, nil
 }
 
 func (sp *Spotify) toggleShuffle(deviceID string, state bool) {

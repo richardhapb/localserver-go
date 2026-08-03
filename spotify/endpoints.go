@@ -2,6 +2,7 @@ package spotify
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,7 +47,11 @@ func SpotifyMiddleware() gin.HandlerFunc {
 		}
 
 		if _, err := currentEnv.refreshToken(); err != nil {
-			log.Printf("Error refreshing token, setting from file: %s\n", err)
+			if errors.Is(err, ErrReauthRequired) {
+				log.Printf("Env %s needs a new login (%s): %s\n", currentEnv.Name, currentEnv.reauthURL(), err)
+			} else {
+				log.Printf("Error refreshing token, setting from file: %s\n", err)
+			}
 		}
 
 		c.Next()
@@ -159,9 +164,7 @@ func Callback(c *gin.Context) {
 func resolveTargetDevice(c *gin.Context, sp *Spotify, deviceName string) (*Device, bool) {
 	device, err := sp.deviceByName(deviceName)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": fmt.Sprintf("could not reach Spotify to resolve device: %v", err),
-		})
+		respondDeviceLookupError(c, sp, err)
 		return nil, false
 	}
 	if device == nil {
@@ -171,6 +174,23 @@ func resolveTargetDevice(c *gin.Context, sp *Spotify, deviceName string) (*Devic
 		return nil, false
 	}
 	return device, true
+}
+
+// respondDeviceLookupError writes the response for a failed device lookup. A
+// dead grant is reported as 401 plus the login URL that fixes it, so it is not
+// confused with Spotify being unreachable.
+func respondDeviceLookupError(c *gin.Context, sp *Spotify, err error) {
+	if errors.Is(err, ErrReauthRequired) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": fmt.Sprintf("Spotify authorization for env %q is no longer valid: %v", sp.Name, err),
+			"fix":   sp.reauthURL(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusBadGateway, gin.H{
+		"error": fmt.Sprintf("could not reach Spotify to resolve device: %v", err),
+	})
 }
 
 // playbackError reports a non-2xx Spotify playback response as an error. The
@@ -450,9 +470,7 @@ func Volume(c *gin.Context) {
 	device, err := currentEnv.activeDevice()
 	if err != nil {
 		log.Println(err)
-		c.JSON(http.StatusBadGateway, gin.H{
-			"error": fmt.Sprintf("could not reach Spotify to resolve device: %v", err),
-		})
+		respondDeviceLookupError(c, currentEnv, err)
 		return
 	}
 	if device == nil {
@@ -490,6 +508,8 @@ func Devices(c *gin.Context) {
 	type envDevices struct {
 		Environment string   `json:"environment"`
 		Devices     []Device `json:"devices"`
+		Error       string   `json:"error,omitempty"`
+		Fix         string   `json:"fix,omitempty"`
 	}
 
 	environments := make([]envDevices, 0, len(envs))
@@ -499,6 +519,8 @@ func Devices(c *gin.Context) {
 			continue
 		}
 
+		entry := envDevices{Environment: name, Devices: []Device{}}
+
 		if _, err := env.refreshToken(); err != nil {
 			log.Printf("Devices: failed to refresh token for %s: %s", name, err)
 		}
@@ -506,15 +528,16 @@ func Devices(c *gin.Context) {
 		devices, err := env.fetchDevices()
 		if err != nil {
 			log.Printf("Devices: failed to fetch devices for %s: %s", name, err)
+			entry.Error = err.Error()
+			if errors.Is(err, ErrReauthRequired) {
+				entry.Fix = env.reauthURL()
+			}
 		}
-		if devices == nil {
-			devices = []Device{}
+		if devices != nil {
+			entry.Devices = devices
 		}
 
-		environments = append(environments, envDevices{
-			Environment: name,
-			Devices:     devices,
-		})
+		environments = append(environments, entry)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

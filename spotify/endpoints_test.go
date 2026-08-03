@@ -2,6 +2,8 @@ package spotify
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +118,165 @@ func TestPlayRequiresDeviceName(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
+}
+
+// A rejected token must never decode into "no devices reachable" -- that is what
+// made a revoked grant look like an offline speaker.
+func TestParseDevicesResponse(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		wantDevices int
+		wantErr     bool
+		wantReauth  bool
+	}{
+		{
+			name:        "200 with devices",
+			status:      http.StatusOK,
+			body:        `{"devices":[{"id":"abc","name":"librespot","is_active":true}]}`,
+			wantDevices: 1,
+		},
+		{
+			name:   "200 with no devices",
+			status: http.StatusOK,
+			body:   `{"devices":[]}`,
+		},
+		{
+			name:       "401 expired token",
+			status:     http.StatusUnauthorized,
+			body:       `{"error":{"status":401,"message":"The access token expired"}}`,
+			wantErr:    true,
+			wantReauth: true,
+		},
+		{
+			name:       "403 insufficient scope",
+			status:     http.StatusForbidden,
+			body:       `{"error":{"status":403,"message":"Insufficient client scope"}}`,
+			wantErr:    true,
+			wantReauth: true,
+		},
+		{
+			name:    "500 from Spotify is not a login problem",
+			status:  http.StatusInternalServerError,
+			body:    "boom",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			devices, err := parseDevicesResponse(tt.status, []byte(tt.body))
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseDevicesResponse() err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got := errors.Is(err, ErrReauthRequired); got != tt.wantReauth {
+				t.Errorf("errors.Is(err, ErrReauthRequired) = %v, want %v (err = %v)", got, tt.wantReauth, err)
+			}
+			if len(devices) != tt.wantDevices {
+				t.Errorf("devices = %d, want %d", len(devices), tt.wantDevices)
+			}
+		})
+	}
+}
+
+// Spotify may rotate the refresh token; reusing the superseded one is what gets
+// the whole grant revoked.
+func TestParseTokenRefresh(t *testing.T) {
+	current := &Tokens{AccessToken: "old-access", RefreshToken: "old-refresh"}
+
+	t.Run("keeps the stored refresh token when none is returned", func(t *testing.T) {
+		got, err := parseTokenRefresh(http.StatusOK, []byte(`{"access_token":"new-access","expires_in":3600}`), current)
+		if err != nil {
+			t.Fatalf("parseTokenRefresh() err = %v", err)
+		}
+		if got.AccessToken != "new-access" {
+			t.Errorf("access token = %q, want %q", got.AccessToken, "new-access")
+		}
+		if got.RefreshToken != "old-refresh" {
+			t.Errorf("refresh token = %q, want %q", got.RefreshToken, "old-refresh")
+		}
+	})
+
+	t.Run("stores a rotated refresh token", func(t *testing.T) {
+		got, err := parseTokenRefresh(http.StatusOK, []byte(`{"access_token":"new-access","refresh_token":"new-refresh"}`), current)
+		if err != nil {
+			t.Fatalf("parseTokenRefresh() err = %v", err)
+		}
+		if got.RefreshToken != "new-refresh" {
+			t.Errorf("refresh token = %q, want %q", got.RefreshToken, "new-refresh")
+		}
+	})
+
+	t.Run("revoked refresh token needs a new login", func(t *testing.T) {
+		_, err := parseTokenRefresh(
+			http.StatusBadRequest,
+			[]byte(`{"error":"invalid_grant","error_description":"Refresh token revoked"}`),
+			current,
+		)
+		if !errors.Is(err, ErrReauthRequired) {
+			t.Fatalf("err = %v, want ErrReauthRequired", err)
+		}
+		if !strings.Contains(err.Error(), "Refresh token revoked") {
+			t.Errorf("err = %v, want it to include Spotify's description", err)
+		}
+	})
+
+	t.Run("other failures are not login problems", func(t *testing.T) {
+		_, err := parseTokenRefresh(http.StatusInternalServerError, []byte("boom"), current)
+		if err == nil {
+			t.Fatal("err = nil, want error")
+		}
+		if errors.Is(err, ErrReauthRequired) {
+			t.Errorf("err = %v, want a plain error", err)
+		}
+	})
+
+	t.Run("success without an access token is an error", func(t *testing.T) {
+		if _, err := parseTokenRefresh(http.StatusOK, []byte(`{"expires_in":3600}`), current); err == nil {
+			t.Fatal("err = nil, want error")
+		}
+	})
+}
+
+// A dead grant must answer 401 with the login URL, not 424 "device unreachable".
+func TestRespondDeviceLookupError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sp := &Spotify{Name: "home"}
+
+	t.Run("reauth required", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		respondDeviceLookupError(c, sp, fmt.Errorf("%w: token rejected", ErrReauthRequired))
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+
+		var body struct {
+			Error string `json:"error"`
+			Fix   string `json:"fix"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		if body.Fix != "/spotify/login?env=home" {
+			t.Errorf("fix = %q, want %q", body.Fix, "/spotify/login?env=home")
+		}
+	})
+
+	t.Run("spotify unreachable", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+
+		respondDeviceLookupError(c, sp, errors.New("dial tcp: no route to host"))
+
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadGateway)
+		}
+	})
 }
 
 func TestDevicesEndpointEmptyEnvs(t *testing.T) {
