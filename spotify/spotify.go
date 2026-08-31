@@ -444,15 +444,20 @@ func (sp *Spotify) playPlaylist(device *Device, contextUri string, volumePercent
 
 			var playlist Playlist
 
-			err = json.NewDecoder(resp.Body).Decode(&playlist)
-			resp.Body.Close()
-			if err != nil {
-				log.Printf("Failed to decode response: %s", err)
-				return nil, err
+			if resp.StatusCode == http.StatusOK {
+				err = json.NewDecoder(resp.Body).Decode(&playlist)
+				if err != nil {
+					resp.Body.Close()
+					log.Printf("Failed to decode response: %s", err)
+					return nil, err
+				}
 			}
+			resp.Body.Close()
 
-			requestBody["offset"] = map[string]int{
-				"position": rand.Intn(playlist.Tracks.Total),
+			if shouldRandomizeOffset(resp.StatusCode, playlist.Tracks.Total) {
+				requestBody["offset"] = map[string]int{
+					"position": rand.Intn(playlist.Tracks.Total),
+				}
 			}
 		}
 	}
@@ -479,6 +484,12 @@ func (sp *Spotify) playPlaylist(device *Device, contextUri string, volumePercent
 	}()
 
 	return sp.makeRequest("PUT", urlStr, jsonBody)
+}
+
+// shouldRandomizeOffset reports whether a random track offset can be picked,
+// which requires a successful playlist lookup with at least one track.
+func shouldRandomizeOffset(statusCode int, total int) bool {
+	return statusCode == http.StatusOK && total > 0
 }
 
 func (sp *Spotify) playPlayback(deviceID string) (*http.Response, error) {
