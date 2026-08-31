@@ -44,6 +44,7 @@ func CreateServer() {
 	manageGroup := router.Group("/manage")
 	{
 		manageGroup.GET("/lamp", manage.ToggleLamp)
+		manageGroup.GET("/audio/switch", manage.SwitchAudio)
 		manageGroup.POST("/grammar", manage.ReviewGrammar)
 	}
 
