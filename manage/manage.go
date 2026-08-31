@@ -15,7 +15,7 @@ import (
 )
 
 type Config struct {
-	OpenAIKey string `envconfig:"OPENAI_API_KEY" required:"true"`
+	OpenAIKey string `envconfig:"OPENAI_API_KEY"`
 }
 
 // Global config instance
@@ -26,7 +26,7 @@ func init() {
 		log.Printf("Warning: .env file not found: %v", err)
 	}
 	if err := envconfig.Process("", &cfg); err != nil {
-		log.Fatalf("Failed to process environment config: %v", err)
+		log.Printf("Warning: failed to process environment config: %v", err)
 	}
 }
 
@@ -37,6 +37,11 @@ func ReviewGrammar(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&content); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: missing or invalid text field"})
+		return
+	}
+
+	if cfg.OpenAIKey == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OPENAI_API_KEY not configured"})
 		return
 	}
 
