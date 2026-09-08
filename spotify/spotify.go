@@ -346,6 +346,50 @@ func (sp *Spotify) makeRequest(method string, urlStr string, body ...[]byte) (*h
 	return resp, nil
 }
 
+// playRetryDelay is the base backoff between play-request retries. A var so
+// tests can zero it out.
+var playRetryDelay = 1500 * time.Millisecond
+
+// maxPlayAttempts bounds how many times a play request is retried before the
+// last response is handed back to the caller.
+const maxPlayAttempts = 3
+
+// isRetryablePlayStatus reports whether status is worth retrying a play
+// request on. Spotify Connect briefly answers 404 "Device not found" right
+// after a device is woken by the preceding volume call, before its backend
+// has finished registering the device as active; 502/503 are its own
+// transient upstream hiccups.
+func isRetryablePlayStatus(status int) bool {
+	switch status {
+	case http.StatusNotFound, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// putWithRetry issues a PUT and retries it with backoff while the response
+// status is transient (isRetryablePlayStatus), up to maxPlayAttempts. It
+// returns the last response received, body unread, for the caller to inspect.
+func (sp *Spotify) putWithRetry(urlStr string, body ...[]byte) (*http.Response, error) {
+	delay := playRetryDelay
+	for attempt := 1; attempt <= maxPlayAttempts; attempt++ {
+		resp, err := sp.makeRequest("PUT", urlStr, body...)
+		if err != nil || !isRetryablePlayStatus(resp.StatusCode) || attempt == maxPlayAttempts {
+			return resp, err
+		}
+
+		log.Printf("Play attempt %d/%d got status %d, retrying in %s", attempt, maxPlayAttempts, resp.StatusCode, delay)
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		time.Sleep(delay)
+		delay *= 2
+	}
+
+	// Unreachable: the loop always returns by the last attempt.
+	return nil, fmt.Errorf("putWithRetry: exhausted attempts without returning")
+}
+
 // appendDeviceID adds the target device_id to a Spotify player URL so the
 // request lands on the requested device instead of Spotify's "active" default.
 func appendDeviceID(baseURL, deviceID string) string {
@@ -483,7 +527,7 @@ func (sp *Spotify) playPlaylist(device *Device, contextUri string, volumePercent
 		sp.enableRepeat(deviceID, "context")
 	}()
 
-	return sp.makeRequest("PUT", urlStr, jsonBody)
+	return sp.putWithRetry(urlStr, jsonBody)
 }
 
 // shouldRandomizeOffset reports whether a random track offset can be picked,
@@ -495,7 +539,7 @@ func shouldRandomizeOffset(statusCode int, total int) bool {
 func (sp *Spotify) playPlayback(deviceID string) (*http.Response, error) {
 	urlStr := appendDeviceID(PlayEndpoint, deviceID)
 
-	return sp.makeRequest("PUT", urlStr)
+	return sp.putWithRetry(urlStr)
 }
 
 func (sp *Spotify) pausePlayback(deviceID string) (*http.Response, error) {
